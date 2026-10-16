@@ -1392,3 +1392,34 @@ fn arrange_annotation_refuses_what_it_cannot_do() {
     assert_eq!(order(&doc, 0), before, "nothing moved");
     assert_eq!(order(&doc, 1), [9, 6]);
 }
+
+#[test]
+fn ink_blend_wraps_the_appearance_in_multiply_and_unwraps_it() {
+    let mut doc = fixture();
+    let index = add_annotation(&mut doc, &new(0, Shape::Rectangle { rect: [10.0, 10.0, 60.0, 40.0] }), &meta("ink")).unwrap();
+    let r = || {
+        let p = page_ref(&doc, 0).unwrap();
+        annots(&doc, p)[index].as_ref().unwrap()
+    };
+    let annot = r();
+    let before = normal_appearance(&doc, &annot_dict(&doc, annot)).expect("drawn");
+    assert!(!ink_blended(&doc, &annot_dict(&doc, annot)));
+    assert!(matches!(set_ink_blend(&mut doc, 0, index, false), Err(AnnotError::Invalid(_))), "not blended yet");
+
+    set_ink_blend(&mut doc, 0, index, true).unwrap();
+    let d = annot_dict(&doc, annot);
+    assert!(ink_blended(&doc, &d));
+    let wrapper = normal_appearance(&doc, &d).unwrap();
+    assert_eq!(ink_original(&doc, wrapper), Some(before), "draws the original");
+    let w = doc.get(wrapper);
+    let res = doc.resolve(w.as_dict().unwrap().get(b"Resources").unwrap());
+    let gs = doc.resolve(res.as_dict().unwrap().get(b"ExtGState").unwrap());
+    let gs = gs.as_dict().unwrap().get(b"PCInk").unwrap().as_dict().unwrap().clone();
+    assert_eq!(gs.name(b"BM"), Some(&b"Multiply"[..]));
+    assert!(matches!(set_ink_blend(&mut doc, 0, index, true), Err(AnnotError::Invalid(_))), "already blended");
+    assert!(summaries(&doc).iter().any(|s| s.index == index && s.ink_blend));
+
+    set_ink_blend(&mut doc, 0, index, false).unwrap();
+    assert_eq!(normal_appearance(&doc, &annot_dict(&doc, annot)), Some(before), "the original is back");
+    assert!(!ink_blended(&doc, &annot_dict(&doc, annot)));
+}

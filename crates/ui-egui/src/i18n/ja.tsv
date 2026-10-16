@@ -2438,3 +2438,5 @@ animation effects	Off	オフ
 	Send Backward	背面へ移動
 	Send to Back	最背面へ移動
 	Place Behind Text	テキストの背面に配置
+	Blend Like Ink	インクのように合成
+	Stop Blending Like Ink	インク合成を解除

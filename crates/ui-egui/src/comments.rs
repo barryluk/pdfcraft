@@ -1655,6 +1655,13 @@ pub(crate) fn context_menu(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo
                         }
                     }
                     ui.separator();
+                    // Multiply: white drops out and the colour darkens the text under it, like
+                    // a pressed seal. It stays a comment, so it can be compared with the next.
+                    let mut blended = a.ink_blend;
+                    if ui.checkbox(&mut blended, tl!("Blend Like Ink")).clicked() {
+                        action = Some(CanvasAction::Edit(Box::new(Edit::InkBlendAnnotation { page, index, on: blended })));
+                        ui.close();
+                    }
                     // Comments always draw over the page; this makes the stamp page content,
                     // under the text (it stops being a comment; undo brings it back).
                     if ui.button(tl!("Place Behind Text")).clicked() {

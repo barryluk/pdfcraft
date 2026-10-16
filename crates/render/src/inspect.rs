@@ -383,6 +383,8 @@ pub struct Annotation {
     /// A Fill & Sign mark: typed text, a check, cross, dot or line, or a typed, drawn or picture
     /// signature or initials (the rules of `pdfcraft_annot::is_fill_sign`).
     pub fill_sign: bool,
+    /// Drawn with Blend Like Ink (`pdfcraft_annot::ink_blended`).
+    pub ink_blend: bool,
 }
 
 impl Annotation {
@@ -1141,6 +1143,16 @@ impl<'a> Inspector<'a> {
                     locked: d.get(b"F").ok().and_then(|f| self.resolve(f).as_i64().ok()).unwrap_or(0) & 128 != 0,
                     intent: self.name(d, b"IT"),
                     fill_sign,
+                    // Keep in step with `pdfcraft_annot::ink_blended`.
+                    ink_blend: d
+                        .get(b"AP")
+                        .ok()
+                        .and_then(|ap| self.dict(ap))
+                        .and_then(|ap| ap.get(b"N").ok())
+                        .and_then(|n| self.dict(n))
+                        .and_then(|n| n.get(b"PCInk").ok())
+                        .and_then(|b| b.as_bool().ok())
+                        .unwrap_or(false),
                 });
             }
         }

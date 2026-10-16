@@ -5141,6 +5141,7 @@ mod tests {
             locked: false,
             intent: None,
             fill_sign,
+            ink_blend: false,
         }
     }
 

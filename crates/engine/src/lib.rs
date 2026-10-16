@@ -261,6 +261,7 @@ fn scope_of(edit: &Edit) -> Scope {
         | Edit::MarkAnnotation { .. }
         | Edit::LockAnnotation { .. }
         | Edit::ArrangeAnnotation { .. }
+        | Edit::InkBlendAnnotation { .. }
         | Edit::ReplaceText { .. }
         | Edit::EraseInk { .. }
         | Edit::MoveAnnotation { .. }
@@ -1399,6 +1400,13 @@ pub enum Edit {
         page: usize,
         index: usize,
     },
+    /// Blend Like Ink: draw the comment in the Multiply blend mode (white drops out, colour darkens
+    /// what is under it), or stop. It stays a comment.
+    InkBlendAnnotation {
+        page: usize,
+        index: usize,
+        on: bool,
+    },
     /// Arrange: move the comment at `index` in its page's stacking order (`/Annots`).
     ArrangeAnnotation {
         page: usize,
@@ -1859,6 +1867,8 @@ pub const EDIT_LABELS: &[&str] = &[
     "Send Backward",
     "Send to Back",
     "Place Behind Text",
+    "Blend Like Ink",
+    "Stop Blending Like Ink",
     "Unlock comment",
     "Move comment",
     "Resize comment",
@@ -1985,6 +1995,8 @@ impl Edit {
             Edit::LockAnnotation { .. } => Label::of("Unlock comment"),
             Edit::ArrangeAnnotation { how, .. } => Label::of(how.name()),
             Edit::PlaceBehindText { .. } => Label::of("Place Behind Text"),
+            Edit::InkBlendAnnotation { on: true, .. } => Label::of("Blend Like Ink"),
+            Edit::InkBlendAnnotation { .. } => Label::of("Stop Blending Like Ink"),
             Edit::MoveAnnotation { .. } => Label::of("Move comment"),
             Edit::ResizeAnnotation { .. } => Label::of("Resize comment"),
             Edit::StyleAnnotation { .. } | Edit::FillAnnotation { .. } | Edit::FontSizeAnnotation { .. } | Edit::SetAnnotationInfo { .. } => {
@@ -2140,6 +2152,7 @@ fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Result<(), Ed
         | Edit::EraseInk { .. }
         | Edit::LockAnnotation { .. }
         | Edit::ArrangeAnnotation { .. }
+        | Edit::InkBlendAnnotation { .. }
         | Edit::MoveAnnotation { .. }
         | Edit::ResizeAnnotation { .. }
         | Edit::StyleAnnotation { .. }
@@ -2402,6 +2415,7 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
             pdfcraft_annot::set_marked(doc, *page, *index, *marked, author, &cx.meta())?;
         }
         Edit::LockAnnotation { page, index, locked } => pdfcraft_annot::set_locked(doc, *page, *index, *locked)?,
+        Edit::InkBlendAnnotation { page, index, on } => pdfcraft_annot::set_ink_blend(doc, *page, *index, *on)?,
         Edit::ArrangeAnnotation { page, index, how } => {
             pdfcraft_annot::arrange_annotation(doc, *page, *index, *how)?;
         }
@@ -2736,6 +2750,7 @@ fn comment_list(doc: &pdfcraft_cos::Document) -> Vec<pdfcraft_render::Annotation
             locked: s.locked,
             intent: s.intent,
             fill_sign: s.fill_sign,
+            ink_blend: s.ink_blend,
         })
         .collect()
 }

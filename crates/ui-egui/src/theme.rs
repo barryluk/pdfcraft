@@ -216,6 +216,9 @@ pub fn install_fonts_for(ctx: &egui::Context, cjk: CjkPreference) {
 
 /// The name of the installed face [`installed_font_definitions`] may add after the embedded ones.
 pub const SYSTEM_FALLBACK: &str = "system-fallback";
+/// The installed Chinese face, last in every family, when the interface is not Chinese and the
+/// build embeds no CJK face (see [`installed_font_definitions`]).
+pub const SYSTEM_HAN_FALLBACK: &str = "system-han-fallback";
 /// The name of the installed Devanagari (Hindi) face [`installed_font_definitions`] may add.
 pub const SYSTEM_DEVANAGARI_FALLBACK: &str = "system-devanagari-fallback";
 /// The name of the installed Telugu face [`installed_font_definitions`] may add.
@@ -275,6 +278,19 @@ pub fn installed_font_definitions(cjk: CjkPreference) -> FontDefinitions {
                     Need::Hans | Need::Hant => stack.iter().position(|n| japanese.contains(n)),
                 };
                 stack.insert(at.unwrap_or(stack.len()), SYSTEM_FALLBACK.to_owned());
+            }
+        }
+        // Chinese text outside a Chinese interface (a file name, a comment's author) in a build
+        // that embeds no CJK face: the installed Chinese face goes last, after the general one,
+        // so it draws instead of empty boxes and changes nothing the other faces can draw.
+        let embedded_cjk = !pdfcraft_fonts::ui_chinese_fonts().is_empty() || !pdfcraft_fonts::ui_japanese_fonts().is_empty();
+        if matches!(need, Need::Other)
+            && !embedded_cjk
+            && let Some(data) = fallback(Need::Hans)
+        {
+            fonts.font_data.insert(SYSTEM_HAN_FALLBACK.to_owned(), data);
+            for stack in fonts.families.values_mut() {
+                stack.push(SYSTEM_HAN_FALLBACK.to_owned());
             }
         }
     }

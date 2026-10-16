@@ -136,7 +136,9 @@ fn system_fallback_fills_missing_scripts() {
         return;
     }
     for (family, stack) in &defs.families {
-        assert_eq!(stack.last().map(String::as_str), Some(theme::SYSTEM_FALLBACK), "{family:?}: {stack:?}");
+        // Only the installed Chinese face may follow it (a build without CJK faces).
+        let last = stack.iter().rev().find(|n| *n != theme::SYSTEM_HAN_FALLBACK);
+        assert_eq!(last.map(String::as_str), Some(theme::SYSTEM_FALLBACK), "{family:?}: {stack:?}");
         assert_eq!(stack.iter().filter(|n| *n == theme::SYSTEM_FALLBACK).count(), 1, "{family:?}");
     }
     let mut fonts = Fonts::new(TextOptions::default(), defs);
@@ -271,7 +273,24 @@ fn chinese_ui_uses_an_installed_chinese_face() {
     // Other languages keep the installed face last, as before.
     let defs = theme::installed_font_definitions(theme::CjkPreference::Default);
     for stack in defs.families.values() {
-        assert!(stack.iter().position(|n| n == theme::SYSTEM_FALLBACK).is_none_or(|i| i + 1 == stack.len()), "{stack:?}");
+        let end = stack.len() - usize::from(stack.last().is_some_and(|n| n == theme::SYSTEM_HAN_FALLBACK));
+        assert!(stack.iter().position(|n| n == theme::SYSTEM_FALLBACK).is_none_or(|i| i + 1 == end), "{stack:?}");
+    }
+}
+
+/// A Chinese file name draws in an English interface even in a build without CJK faces, when the
+/// system has a Chinese face: it is the last fallback of every family.
+#[test]
+fn chinese_file_names_draw_in_an_english_interface() {
+    let defs = theme::installed_font_definitions(theme::CjkPreference::Default);
+    let embedded = !pdfcraft_fonts::ui_chinese_fonts().is_empty() || !pdfcraft_fonts::ui_japanese_fonts().is_empty();
+    if !embedded && !defs.font_data.contains_key(theme::SYSTEM_HAN_FALLBACK) {
+        eprintln!("skipping chinese_file_names_draw_in_an_english_interface: no installed Chinese face");
+        return;
+    }
+    let mut fonts = Fonts::new(TextOptions::default(), defs);
+    for id in families() {
+        assert!(fonts.has_glyphs(&id, "公司章程"), "{id:?}");
     }
 }
 

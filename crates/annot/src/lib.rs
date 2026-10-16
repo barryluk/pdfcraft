@@ -1618,6 +1618,87 @@ pub fn arrange_annotation(doc: &mut Document, page: usize, index: usize, how: Ar
     Ok(to)
 }
 
+/// The normal appearance stream (`/AP /N`) of an annotation dictionary, when it is one stream.
+fn normal_appearance(doc: &Document, d: &Dict) -> Option<ObjRef> {
+    let ap = d.get(b"AP").map(|a| doc.resolve(a))?;
+    let n = ap.as_dict()?.reference(b"N")?;
+    matches!(&*doc.get(n), Object::Stream(_)).then_some(n)
+}
+
+/// The appearance a Blend Like Ink wrapper draws, when `ap` is one of ours.
+fn ink_original(doc: &Document, ap: ObjRef) -> Option<ObjRef> {
+    let obj = doc.get(ap);
+    let d = obj.as_dict()?;
+    if !matches!(d.get(b"PCInk"), Some(Object::Bool(true))) {
+        return None;
+    }
+    let res = doc.resolve(d.get(b"Resources")?);
+    let xo = doc.resolve(res.as_dict()?.get(b"XObject")?);
+    xo.as_dict()?.reference(b"PCOrig")
+}
+
+/// Whether the comment `d` is drawn with Blend Like Ink.
+pub fn ink_blended(doc: &Document, d: &Dict) -> bool {
+    normal_appearance(doc, d).is_some_and(|ap| ink_original(doc, ap).is_some())
+}
+
+/// Blend Like Ink: draw a comment's appearance (a stamp's, typically) in the Multiply blend mode
+/// (ISO 32000-2 §11.3.5), so its white parts drop out and its colour darkens what is under it,
+/// like a seal pressed over printed text. It stays a comment. On wraps the appearance in a form
+/// that draws it with `/BM /Multiply`; off puts the original appearance back.
+pub fn set_ink_blend(doc: &mut Document, page: usize, index: usize, on: bool) -> Result<(), AnnotError> {
+    let (_, r) = annot_ref(doc, page, index)?;
+    unlocked(doc, r)?;
+    let d = annot_dict(doc, r);
+    let current = normal_appearance(doc, &d).ok_or_else(|| AnnotError::Invalid("this comment has no drawing to blend".into()))?;
+    let original = ink_original(doc, current);
+    let new_n = match (on, original) {
+        (true, Some(_)) => return Err(AnnotError::Invalid("the comment is already blended like ink".into())),
+        (false, None) => return Err(AnnotError::Invalid("the comment is not blended like ink".into())),
+        (false, Some(orig)) => orig,
+        (true, None) => {
+            let form = doc.get(current).as_dict().cloned().unwrap_or_default();
+            let nums = |k: &[u8]| -> Option<Vec<f64>> {
+                let o = doc.resolve(form.get(k)?);
+                o.as_array()?.iter().map(|x| doc.resolve(x).as_f64()).collect()
+            };
+            let b = nums(b"BBox").filter(|b| b.len() == 4 && b.iter().all(|v| v.is_finite()));
+            let b = b.ok_or_else(|| AnnotError::Invalid("this comment's drawing has no usable bounding box".into()))?;
+            let m = nums(b"Matrix").filter(|m| m.len() == 6 && m.iter().all(|v| v.is_finite())).unwrap_or_else(|| vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+            // `Do` applies the original's /Matrix, so the wrapper's box is the original's box under it.
+            let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+            for (x, y) in [(b[0], b[1]), (b[2], b[1]), (b[0], b[3]), (b[2], b[3])] {
+                let (px, py) = (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]);
+                (x0, y0, x1, y1) = (x0.min(px), y0.min(py), x1.max(px), y1.max(py));
+            }
+            let mut gs = Dict::new();
+            gs.set(b"Type".to_vec(), Object::name("ExtGState"));
+            gs.set(b"BM".to_vec(), Object::name("Multiply"));
+            let mut gss = Dict::new();
+            gss.set(b"PCInk".to_vec(), Object::Dict(gs));
+            let mut xo = Dict::new();
+            xo.set(b"PCOrig".to_vec(), Object::Ref(current));
+            let mut res = Dict::new();
+            res.set(b"ExtGState".to_vec(), Object::Dict(gss));
+            res.set(b"XObject".to_vec(), Object::Dict(xo));
+            let mut w = Dict::new();
+            w.set(b"Type".to_vec(), Object::name("XObject"));
+            w.set(b"Subtype".to_vec(), Object::name("Form"));
+            w.set(b"BBox".to_vec(), Object::Array([x0, y0, x1, y1].iter().map(|v| Object::Real(*v)).collect()));
+            w.set(b"Resources".to_vec(), Object::Dict(res));
+            w.set(b"PCInk".to_vec(), Object::Bool(true));
+            doc.add(Object::Stream(Stream::flate(w, b"q /PCInk gs /PCOrig Do Q")))
+        }
+    };
+    let mut ap = d.get(b"AP").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().cloned()).unwrap_or_default();
+    ap.set(b"N".to_vec(), Object::Ref(new_n));
+    match d.reference(b"AP") {
+        Some(apr) => doc.set(apr, Object::Dict(ap)),
+        None => doc.update_dict(r, |d| d.set(b"AP".to_vec(), Object::Dict(ap)))?,
+    }
+    Ok(())
+}
+
 /// Change a comment's text. Text boxes are redrawn to show it, and their rectangle follows the
 /// new text: the wrap width and top edge stay, the height fits the wrapped lines.
 pub fn set_contents(doc: &mut Document, page: usize, index: usize, text: &str, meta: &Meta) -> Result<(), AnnotError> {
@@ -2159,6 +2240,8 @@ pub struct Summary {
     pub intent: Option<String>,
     /// A Fill & Sign mark ([`is_fill_sign`]).
     pub fill_sign: bool,
+    /// Drawn with Blend Like Ink ([`ink_blended`]).
+    pub ink_blend: bool,
 }
 
 fn text_value(doc: &Document, d: &Dict, key: &[u8]) -> Option<String> {
@@ -2232,6 +2315,7 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
                 locked: annotation_flags(doc, d) & FLAG_LOCKED != 0,
                 intent: d.get(b"IT").and_then(|o| doc.resolve(o).as_name().map(|n| String::from_utf8_lossy(n).into_owned())),
                 fill_sign: is_fill_sign(doc, d),
+                ink_blend: ink_blended(doc, d),
             });
         }
     }

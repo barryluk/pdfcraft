@@ -21,7 +21,7 @@ jobs:
         shell: bash
         run: |
           set +e
-          for c in pdfcraft-edit pdfcraft-annot pdfcraft-engine pdfcraft-ui-egui; do
+          for c in pdfcraft-edit pdfcraft-annot pdfcraft-render pdfcraft-engine pdfcraft-ui-egui; do
             cargo test -p $c --no-fail-fast > $c.log 2>&1
             echo "::notice::$c exit $?"
             grep -E "^test .* FAILED|^error(\[|:)" $c.log | head -20 | while read -r l; do echo "::error::$c: $l"; done
