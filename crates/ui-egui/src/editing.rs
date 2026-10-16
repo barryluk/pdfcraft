@@ -147,7 +147,7 @@ impl PdfCraftApp {
                             view.comments.editing = Some((a.page, n, String::new()));
                         }
                     }
-                    Edit::DeleteAnnotation { .. } => view.comments.selected = None,
+                    Edit::DeleteAnnotation { .. } | Edit::PlaceBehindText { .. } => view.comments.selected = None,
                     _ => {}
                 }
                 if std::mem::take(&mut view.comments.tool_done) && !self.comment_prefs.pinned {

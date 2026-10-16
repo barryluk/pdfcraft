@@ -1393,6 +1393,12 @@ pub enum Edit {
         marked: bool,
         author: String,
     },
+    /// Place Behind Text: draw the comment at `index` (a stamp, say) underneath the page's
+    /// existing text and lines, as page content. It stops being a comment.
+    PlaceBehindText {
+        page: usize,
+        index: usize,
+    },
     /// Arrange: move the comment at `index` in its page's stacking order (`/Annots`).
     ArrangeAnnotation {
         page: usize,
@@ -1848,6 +1854,11 @@ pub const EDIT_LABELS: &[&str] = &[
     "Mark with checkmark",
     "Remove checkmark",
     "Lock comment",
+    "Bring to Front",
+    "Bring Forward",
+    "Send Backward",
+    "Send to Back",
+    "Place Behind Text",
     "Unlock comment",
     "Move comment",
     "Resize comment",
@@ -1973,6 +1984,7 @@ impl Edit {
             Edit::LockAnnotation { locked: true, .. } => Label::of("Lock comment"),
             Edit::LockAnnotation { .. } => Label::of("Unlock comment"),
             Edit::ArrangeAnnotation { how, .. } => Label::of(how.name()),
+            Edit::PlaceBehindText { .. } => Label::of("Place Behind Text"),
             Edit::MoveAnnotation { .. } => Label::of("Move comment"),
             Edit::ResizeAnnotation { .. } => Label::of("Resize comment"),
             Edit::StyleAnnotation { .. } | Edit::FillAnnotation { .. } | Edit::FontSizeAnnotation { .. } | Edit::SetAnnotationInfo { .. } => {
@@ -2200,6 +2212,7 @@ fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Result<(), Ed
         | Edit::RegisterTextFont { .. }
         | Edit::EditPageImage { .. }
         | Edit::Flatten { .. }
+        | Edit::PlaceBehindText { .. }
         | Edit::FlattenFillSign => {
             if p.modify() {
                 Ok(())
@@ -2667,6 +2680,7 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
             }
             strip_xfa(doc, cx)?;
         }
+        Edit::PlaceBehindText { page, index } => pdfcraft_edit::place_behind_content(doc, *page, *index)?,
         Edit::FlattenFillSign => {
             let n = pdfcraft_model::pages(doc).len();
             pdfcraft_edit::flatten_fill_sign(doc, &(0..n).collect::<Vec<_>>())?;

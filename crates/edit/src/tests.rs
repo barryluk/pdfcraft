@@ -232,6 +232,43 @@ fn flattening_draws_appearances_into_the_page_and_removes_the_comments() {
     assert!(marks_present(&doc).is_empty(), "flattened content is not a removable mark");
 }
 
+/// Place Behind Text draws one comment first in the page's content, so the page's own text
+/// draws over it, and removes only that comment (with its pop-up).
+#[test]
+fn place_behind_content_draws_one_comment_under_the_page() {
+    use pdfcraft_annot::{Meta, NewAnnotation, Shape, Style, add_annotation};
+    let mut doc = fixture();
+    let meta = Meta { date: None, id: "x".into() };
+    let add = |doc: &mut Document, rect: [f64; 4]| {
+        let shape = Shape::Rectangle { rect };
+        let style = Style::default_for(&shape);
+        add_annotation(doc, &NewAnnotation { page: 0, shape, style, contents: "c".into(), author: "a".into() }, &meta).unwrap()
+    };
+    let keep = add(&mut doc, [10.0, 10.0, 110.0, 60.0]);
+    let behind = add(&mut doc, [200.0, 200.0, 300.0, 260.0]);
+    assert_eq!(keep, 0);
+    let before = streams(&doc, 0);
+    place_behind_content(&mut doc, 0, behind).unwrap();
+    let doc = reopen(&doc);
+    let s = streams(&doc, 0);
+    assert_eq!(s.len(), before.len() + 1, "one stream added, the original not wrapped: {s:?}");
+    assert!(s[0].contains("/PCFl0 Do"), "drawn first, under everything: {s:?}");
+    assert_eq!(&s[1..], &before[..], "the page's own content follows unchanged");
+    let p = &pdfcraft_model::pages(&doc)[0];
+    let annots = doc.resolve(p.dict.get(b"Annots").expect("the other comment stays"));
+    let list = annots.as_array().unwrap();
+    let subtypes: Vec<_> = list.iter().map(|e| doc.resolve(e).as_dict().unwrap().name(b"Subtype").unwrap().to_vec()).collect();
+    assert_eq!(subtypes.iter().filter(|t| t.as_slice() == b"Square").count(), 1, "only the chosen comment went: {subtypes:?}");
+}
+
+#[test]
+fn place_behind_content_refuses_what_it_cannot_do() {
+    let mut doc = fixture();
+    assert!(matches!(place_behind_content(&mut doc, 0, 0), Err(EditError::Invalid(_))), "no comment there");
+    assert_eq!(place_behind_content(&mut doc, 9, 0), Err(EditError::NoSuchPage(9)));
+    assert!(!doc.is_modified());
+}
+
 /// #1317: a cloudy square this builder cannot draw stays on the page. A solid square, a hidden
 /// cloudy square and a cloudy square that already has an appearance keep their previous results.
 #[test]

@@ -1654,6 +1654,14 @@ pub(crate) fn context_menu(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo
                             ui.close();
                         }
                     }
+                    ui.separator();
+                    // Comments always draw over the page; this makes the stamp page content,
+                    // under the text (it stops being a comment; undo brings it back).
+                    if ui.button(tl!("Place Behind Text")).clicked() {
+                        view.comments.selected = None;
+                        action = Some(CanvasAction::Edit(Box::new(Edit::PlaceBehindText { page, index })));
+                        ui.close();
+                    }
                 });
             });
             let thread: Vec<&pdfcraft_render::Annotation> = info.annotations.iter().filter(|r| a.name.is_some() && r.in_reply_to == a.name).collect();
