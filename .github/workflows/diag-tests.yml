@@ -1,7 +1,8 @@
 name: Diagnose tests
 
 on:
-  workflow_dispatch:
+  push:
+    branches: ["feat/**"]
 
 jobs:
   test:
