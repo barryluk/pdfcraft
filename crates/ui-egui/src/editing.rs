@@ -939,6 +939,7 @@ fn comment_page(edit: &Edit) -> Option<usize> {
         | Edit::SetAnnotationContents { page, .. }
         | Edit::ReplyToAnnotation { page, .. }
         | Edit::SetAnnotationStatus { page, .. }
+        | Edit::ArrangeAnnotation { page, .. }
         | Edit::MoveAnnotation { page, .. }
         | Edit::ResizeAnnotation { page, .. }
         | Edit::StyleAnnotation { page, .. }

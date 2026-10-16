@@ -1541,6 +1541,83 @@ pub fn delete_annotation(doc: &mut Document, page: usize, index: usize) -> Resul
     set_annots(doc, p, kept)
 }
 
+/// Where an Arrange command moves a comment in its page's stacking order. Later entries in
+/// `/Annots` are drawn over earlier ones (ISO 32000-2 §12.5.1), so the order is the z-order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Arrange {
+    /// Over every other comment on the page.
+    BringToFront,
+    /// Over the next comment above it.
+    BringForward,
+    /// Under the next comment below it.
+    SendBackward,
+    /// Under every other comment on the page.
+    SendToBack,
+}
+
+impl Arrange {
+    /// The menu wording, in English (callers translate it).
+    pub fn name(self) -> &'static str {
+        match self {
+            Arrange::BringToFront => "Bring to Front",
+            Arrange::BringForward => "Bring Forward",
+            Arrange::SendBackward => "Send Backward",
+            Arrange::SendToBack => "Send to Back",
+        }
+    }
+}
+
+/// The position the entry at `index` lands on after `how`, given which `/Annots` entries are
+/// layers (`layer[i]`: a comment that is not a reply, see [`is_comment_subtype`]). Steps skip
+/// the other entries (pop-ups, replies, links, fields), whose place in the list draws nothing a
+/// stamp could cover. `None` when nothing would change, or when `index` is not a layer.
+pub fn arrange_destination(layer: &[bool], index: usize, how: Arrange) -> Option<usize> {
+    if !layer.get(index).copied().unwrap_or(false) {
+        return None;
+    }
+    let others = |i: &usize| *i != index && layer.get(*i).copied().unwrap_or(false);
+    let above = (index.saturating_add(1)..layer.len()).find(others);
+    let below = (0..index).rev().find(others);
+    // Positions are where the entry sits once it has been taken out and put back.
+    match how {
+        Arrange::BringToFront => above.map(|_| layer.len().saturating_sub(1)),
+        Arrange::BringForward => above,
+        Arrange::SendBackward => below,
+        Arrange::SendToBack => below.map(|_| 0),
+    }
+}
+
+/// Which entries of a page's `/Annots` are layers for [`arrange_destination`].
+fn layers(doc: &Document, list: &[Object]) -> Vec<bool> {
+    list.iter()
+        .map(|e| {
+            let obj = doc.resolve(e);
+            let Some(d) = obj.as_dict() else { return false };
+            let comment = d.name(b"Subtype").is_some_and(|s| is_comment_subtype(&String::from_utf8_lossy(s)));
+            comment && d.get(b"IRT").is_none()
+        })
+        .collect()
+}
+
+/// Move the comment at `index` in its page's stacking order and return its new index. Its
+/// pop-up and replies stay where they are: they point at it by reference, not by position.
+pub fn arrange_annotation(doc: &mut Document, page: usize, index: usize, how: Arrange) -> Result<usize, AnnotError> {
+    let p = page_ref(doc, page)?;
+    let mut list = annots(doc, p);
+    let entry = list.get(index).cloned().ok_or(AnnotError::NoSuchAnnotation { page, index })?;
+    if let Some(r) = entry.as_ref() {
+        unlocked(doc, r)?;
+    }
+    let to = arrange_destination(&layers(doc, &list), index, how)
+        .ok_or_else(|| AnnotError::Invalid(format!("the comment can't be moved further ({})", how.name())))?;
+    let moved = list.remove(index);
+    // `to` indexes the original list, so it is at most the shortened list's length.
+    let to = to.min(list.len());
+    list.insert(to, moved);
+    set_annots(doc, p, list)?;
+    Ok(to)
+}
+
 /// Change a comment's text. Text boxes are redrawn to show it, and their rectangle follows the
 /// new text: the wrap width and top edge stay, the height fits the wrapped lines.
 pub fn set_contents(doc: &mut Document, page: usize, index: usize, text: &str, meta: &Meta) -> Result<(), AnnotError> {

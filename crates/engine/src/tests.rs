@@ -1436,6 +1436,50 @@ fn comments_are_added_drawn_threaded_and_undone() {
     assert!(px[0] > 200 && px[1] < 40, "back where it was: {px:?}");
 }
 
+/// Arrange changes which of two overlapping comments is drawn on top, and undoes.
+#[test]
+fn arrange_changes_the_stacking_order_and_undoes() {
+    let (mut s, id) = session_with(1);
+    s.apply(id, rect_comment(0, [80.0, 80.0, 120.0, 120.0])).unwrap();
+    let blue = Edit::AddAnnotation(NewAnnotation {
+        page: 0,
+        shape: Shape::Rectangle { rect: [90.0, 90.0, 130.0, 130.0] },
+        style: Style { color: [0.0, 0.0, 1.0], opacity: 1.0, width: 2.0, fill: Some([0.0, 0.0, 1.0]) },
+        contents: String::new(),
+        author: "Reviewer".into(),
+    });
+    s.apply(id, blue).unwrap();
+    let on_top = |s: &Session| {
+        let px = pixel(s, id, 0, 105, 105);
+        if px[2] > 200 && px[0] < 40 {
+            "blue"
+        } else if px[0] > 200 && px[2] < 40 {
+            "red"
+        } else {
+            "neither"
+        }
+    };
+    assert_eq!(on_top(&s), "blue", "added last, drawn last");
+    // Where each one is in /Annots now (a comment may bring a pop-up entry along).
+    let at = |s: &Session, blue: bool| {
+        let a = &s.get(id).unwrap().info.annotations;
+        a.iter().find(|a| a.color.is_some_and(|c| (c[2] > 0.5) == blue)).map(|a| a.index).expect("both are listed")
+    };
+    let arrange = |s: &mut Session, index: usize, how: Arrange| s.apply(id, Edit::ArrangeAnnotation { page: 0, index, how });
+    let i = at(&s, true);
+    arrange(&mut s, i, Arrange::SendToBack).unwrap();
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Send to Back"));
+    assert_eq!(on_top(&s), "red");
+    let i = at(&s, true);
+    assert!(arrange(&mut s, i, Arrange::SendBackward).is_err(), "already at the back");
+    arrange(&mut s, i, Arrange::BringForward).unwrap();
+    assert_eq!(on_top(&s), "blue");
+    s.undo(id).unwrap();
+    assert_eq!(on_top(&s), "red");
+    s.undo(id).unwrap();
+    assert_eq!(on_top(&s), "blue");
+}
+
 #[test]
 fn highlight_multiplies_over_text() {
     let (mut s, id) = session_with(1);

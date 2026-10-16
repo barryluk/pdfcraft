@@ -13,7 +13,7 @@
 //! applied by the app, so each change is one undo step.
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Stroke, pos2, vec2};
-use pdfcraft_engine::{Edit, LineEnding, Markup, NewAnnotation, NoteIcon, ReviewState, Rgb, Shape, Style};
+use pdfcraft_engine::{Arrange, Edit, LineEnding, Markup, NewAnnotation, NoteIcon, ReviewState, Rgb, Shape, Style, arrange_destination};
 use pdfcraft_render::{Annotation, DocInfo, PageInfo, PageText};
 
 use crate::canvas::{DocView, PageXform};
@@ -1621,6 +1621,38 @@ pub(crate) fn context_menu(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo
                             endings: None,
                         })));
                         ui.close();
+                    }
+                });
+            });
+            // Arrange: the page's stacking order. Replies are not layers of their own.
+            let mut layer = Vec::new();
+            for r in info.annotations.iter().filter(|r| r.page == page) {
+                if let Some(slot) = r.index.checked_add(1).filter(|n| *n <= 100_000) {
+                    if layer.len() < slot {
+                        layer.resize(slot, false);
+                    }
+                    if let Some(l) = layer.get_mut(r.index) {
+                        *l = r.in_reply_to.is_none();
+                    }
+                }
+            }
+            ui.add_enabled_ui(allowed && !a.locked, |ui| {
+                ui.menu_button(tl!("Arrange"), |ui| {
+                    for (how, label) in [
+                        (Arrange::BringToFront, tl!("Bring to Front")),
+                        (Arrange::BringForward, tl!("Bring Forward")),
+                        (Arrange::SendBackward, tl!("Send Backward")),
+                        (Arrange::SendToBack, tl!("Send to Back")),
+                    ] {
+                        let to = arrange_destination(&layer, index, how);
+                        if ui.add_enabled(to.is_some(), egui::Button::new(label)).clicked()
+                            && let Some(to) = to
+                        {
+                            // The comment stays selected at the position it moves to.
+                            view.comments.selected = Some((page, to));
+                            action = Some(CanvasAction::Edit(Box::new(Edit::ArrangeAnnotation { page, index, how })));
+                            ui.close();
+                        }
                     }
                 });
             });

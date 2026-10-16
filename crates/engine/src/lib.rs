@@ -140,8 +140,8 @@ pub use links::{
 pub use pdfcraft_annot::appearance as annot_text;
 pub use pdfcraft_annot::links::{Highlight as LinkHighlight, LinkAction, LinkItem, LinkStyle};
 pub use pdfcraft_annot::{
-    AppearanceCache, AttachIcon, FillMark, LineEnding, Markup, NOTE_SIZE, NewAnnotation, NoteIcon, OverlayFont, OverlayLook, Props as CommentProps,
-    ReviewState, Rgb, Shape, StampGroup, StampKind, Style, rect_quad,
+    AppearanceCache, Arrange, AttachIcon, FillMark, LineEnding, Markup, NOTE_SIZE, NewAnnotation, NoteIcon, OverlayFont, OverlayLook,
+    Props as CommentProps, ReviewState, Rgb, Shape, StampGroup, StampKind, Style, arrange_destination, rect_quad,
 };
 pub use pdfcraft_forms::detect;
 pub use pdfcraft_optimize as optimize;
@@ -260,6 +260,7 @@ fn scope_of(edit: &Edit) -> Scope {
         | Edit::SetAnnotationStatus { .. }
         | Edit::MarkAnnotation { .. }
         | Edit::LockAnnotation { .. }
+        | Edit::ArrangeAnnotation { .. }
         | Edit::ReplaceText { .. }
         | Edit::EraseInk { .. }
         | Edit::MoveAnnotation { .. }
@@ -1392,6 +1393,12 @@ pub enum Edit {
         marked: bool,
         author: String,
     },
+    /// Arrange: move the comment at `index` in its page's stacking order (`/Annots`).
+    ArrangeAnnotation {
+        page: usize,
+        index: usize,
+        how: Arrange,
+    },
     /// Properties ▸ Locked.
     LockAnnotation {
         page: usize,
@@ -1965,6 +1972,7 @@ impl Edit {
             Edit::MarkAnnotation { .. } => Label::of("Remove checkmark"),
             Edit::LockAnnotation { locked: true, .. } => Label::of("Lock comment"),
             Edit::LockAnnotation { .. } => Label::of("Unlock comment"),
+            Edit::ArrangeAnnotation { how, .. } => Label::of(how.name()),
             Edit::MoveAnnotation { .. } => Label::of("Move comment"),
             Edit::ResizeAnnotation { .. } => Label::of("Resize comment"),
             Edit::StyleAnnotation { .. } | Edit::FillAnnotation { .. } | Edit::FontSizeAnnotation { .. } | Edit::SetAnnotationInfo { .. } => {
@@ -2119,6 +2127,7 @@ fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Result<(), Ed
         | Edit::ReplaceText { .. }
         | Edit::EraseInk { .. }
         | Edit::LockAnnotation { .. }
+        | Edit::ArrangeAnnotation { .. }
         | Edit::MoveAnnotation { .. }
         | Edit::ResizeAnnotation { .. }
         | Edit::StyleAnnotation { .. }
@@ -2380,6 +2389,9 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
             pdfcraft_annot::set_marked(doc, *page, *index, *marked, author, &cx.meta())?;
         }
         Edit::LockAnnotation { page, index, locked } => pdfcraft_annot::set_locked(doc, *page, *index, *locked)?,
+        Edit::ArrangeAnnotation { page, index, how } => {
+            pdfcraft_annot::arrange_annotation(doc, *page, *index, *how)?;
+        }
         Edit::MoveAnnotation { page, index, dx, dy } => pdfcraft_annot::move_annotation(doc, *page, *index, *dx, *dy, &cx.meta())?,
         Edit::ResizeAnnotation { page, index, rect } => pdfcraft_annot::set_rect(doc, *page, *index, *rect, &cx.meta())?,
         Edit::StyleAnnotation { page, index, color, opacity, width, endings } => {

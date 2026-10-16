@@ -1308,3 +1308,87 @@ fn text_box_font_size_changes_the_da_and_grows_the_box() {
         assert_eq!(props(&doc, 0, i).unwrap().font_size, None);
     }
 }
+
+/// One page whose `/Annots` holds, in order: Square (0), its pop-up (1), Stamp (2), a reply to
+/// the Square (3) and Circle (4). Object 9 is a locked Ink on a second page.
+fn layered() -> Document {
+    let objs: Vec<&[u8]> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>",                                        // 1
+        b"<< /Type /Pages /Kids [3 0 R 10 0 R] /Count 2 /MediaBox [0 0 612 792] >>", // 2
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R 7 0 R 8 0 R] >>",  // 3
+        b"<< /Type /Annot /Subtype /Square /Rect [0 0 10 10] /Popup 5 0 R >>",       // 4
+        b"<< /Type /Annot /Subtype /Popup /Rect [0 0 10 10] /Parent 4 0 R >>",       // 5
+        b"<< /Type /Annot /Subtype /Stamp /Rect [0 0 10 10] >>",                     // 6
+        b"<< /Type /Annot /Subtype /Text /Rect [0 0 10 10] /IRT 4 0 R >>",           // 7
+        b"<< /Type /Annot /Subtype /Circle /Rect [0 0 10 10] >>",                    // 8
+        b"<< /Type /Annot /Subtype /Ink /Rect [0 0 10 10] /F 128 >>",                // 9
+        b"<< /Type /Page /Parent 2 0 R /Annots [9 0 R 6 0 R] >>",                    // 10
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    Document::open(Arc::new(out)).expect("opens")
+}
+
+/// The object numbers of page `page`'s `/Annots`, in order.
+fn order(doc: &Document, page: usize) -> Vec<u32> {
+    let p = page_ref(doc, page).expect("page");
+    annots(doc, p).iter().filter_map(|e| e.as_ref().map(|r| r.num)).collect()
+}
+
+#[test]
+fn arrange_destination_steps_over_non_layers() {
+    // Square, pop-up, Stamp, reply, Circle.
+    let layer = [true, false, true, false, true];
+    assert_eq!(arrange_destination(&layer, 2, Arrange::BringForward), Some(4));
+    assert_eq!(arrange_destination(&layer, 2, Arrange::SendBackward), Some(0));
+    assert_eq!(arrange_destination(&layer, 2, Arrange::BringToFront), Some(4));
+    assert_eq!(arrange_destination(&layer, 2, Arrange::SendToBack), Some(0));
+    // Already at the ends.
+    assert_eq!(arrange_destination(&layer, 4, Arrange::BringForward), None);
+    assert_eq!(arrange_destination(&layer, 4, Arrange::BringToFront), None);
+    assert_eq!(arrange_destination(&layer, 0, Arrange::SendBackward), None);
+    assert_eq!(arrange_destination(&layer, 0, Arrange::SendToBack), None);
+    // Not a layer, out of range, empty, alone.
+    assert_eq!(arrange_destination(&layer, 1, Arrange::BringToFront), None);
+    assert_eq!(arrange_destination(&layer, 99, Arrange::BringToFront), None);
+    assert_eq!(arrange_destination(&[], 0, Arrange::SendToBack), None);
+    assert_eq!(arrange_destination(&[true], 0, Arrange::BringToFront), None);
+}
+
+#[test]
+fn arrange_annotation_reorders_annots() {
+    let mut doc = layered();
+    assert_eq!(arrange_annotation(&mut doc, 0, 2, Arrange::BringForward), Ok(4));
+    assert_eq!(order(&doc, 0), [4, 5, 7, 8, 6], "the Stamp is now over the Circle");
+    assert_eq!(arrange_annotation(&mut doc, 0, 4, Arrange::SendToBack), Ok(0));
+    assert_eq!(order(&doc, 0), [6, 4, 5, 7, 8]);
+    assert_eq!(arrange_annotation(&mut doc, 0, 0, Arrange::BringToFront), Ok(4));
+    assert_eq!(order(&doc, 0), [4, 5, 7, 8, 6]);
+    assert_eq!(arrange_annotation(&mut doc, 0, 4, Arrange::SendBackward), Ok(3));
+    assert_eq!(order(&doc, 0), [4, 5, 7, 6, 8], "under the Circle, past the reply");
+}
+
+#[test]
+fn arrange_annotation_refuses_what_it_cannot_do() {
+    let mut doc = layered();
+    let before = order(&doc, 0);
+    assert!(matches!(arrange_annotation(&mut doc, 0, 4, Arrange::BringToFront), Err(AnnotError::Invalid(_))), "already on top");
+    assert!(matches!(arrange_annotation(&mut doc, 0, 1, Arrange::SendToBack), Err(AnnotError::Invalid(_))), "a pop-up is not a layer");
+    assert_eq!(arrange_annotation(&mut doc, 0, 9, Arrange::SendToBack), Err(AnnotError::NoSuchAnnotation { page: 0, index: 9 }));
+    assert_eq!(arrange_annotation(&mut doc, 7, 0, Arrange::SendToBack), Err(AnnotError::NoSuchPage(7)));
+    assert!(matches!(arrange_annotation(&mut doc, 1, 0, Arrange::BringToFront), Err(AnnotError::Invalid(_))), "locked");
+    assert_eq!(order(&doc, 0), before, "nothing moved");
+    assert_eq!(order(&doc, 1), [9, 6]);
+}

@@ -1,0 +1,42 @@
+name: Build Windows app
+
+# A plain, unsigned Windows build of the desktop app for trying a branch out. Run it from the
+# Actions tab ("Run workflow"), or push to a feat/ branch; download "pdfcraft-windows" from the
+# run's Artifacts. release.yml stays the signed, packaged route.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["feat/**"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+concurrency:
+  group: build-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Build
+        run: cargo build --release -p pdfcraft
+
+      - name: Upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pdfcraft-windows
+          path: target/release/pdfcraft.exe
+          if-no-files-found: error
