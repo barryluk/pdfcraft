@@ -5142,6 +5142,7 @@ mod tests {
             intent: None,
             fill_sign,
             ink_blend: false,
+            rotation: None,
         }
     }
 

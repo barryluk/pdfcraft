@@ -385,6 +385,9 @@ pub struct Annotation {
     pub fill_sign: bool,
     /// Drawn with Blend Like Ink (`pdfcraft_annot::ink_blended`).
     pub ink_blend: bool,
+    /// A turned stamp's angle (degrees counterclockwise in user space) and unturned width and
+    /// height (`pdfcraft_annot::stamp_rotation`).
+    pub rotation: Option<(f32, [f32; 2])>,
 }
 
 impl Annotation {
@@ -777,6 +780,17 @@ impl<'a> Inspector<'a> {
         }
     }
 
+    /// A turned stamp's angle and unturned size. Keep in step with `pdfcraft_annot::stamp_rotation`.
+    fn stamp_rotation(&self, d: &Dictionary) -> Option<(f32, [f32; 2])> {
+        let angle = d.get(b"PCAngle").ok().and_then(|a| self.resolve(a).as_float().ok()).filter(|a| a.is_finite() && *a != 0.0)?;
+        let size = self.resolve(d.get(b"PCRotSize").ok()?).as_array().ok()?.clone();
+        let size: Vec<f32> = size.iter().filter_map(|v| self.resolve(v).as_float().ok()).collect();
+        match size[..] {
+            [w, h] if w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0 && w < 1e7 && h < 1e7 => Some((angle, [w, h])),
+            _ => None,
+        }
+    }
+
     fn page_of(&self, o: &Object) -> Option<usize> {
         match o {
             Object::Reference(id) => self.page_index.get(id).copied(),
@@ -1153,6 +1167,7 @@ impl<'a> Inspector<'a> {
                         .and_then(|n| n.get(b"PCInk").ok())
                         .and_then(|b| b.as_bool().ok())
                         .unwrap_or(false),
+                    rotation: self.stamp_rotation(d),
                 });
             }
         }

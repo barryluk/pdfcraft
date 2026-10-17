@@ -380,6 +380,9 @@ pub enum Gesture {
     Move { page: usize, index: usize, from: Pos2 },
     /// Resizing a comment by one of its handles: (dx, dy) ∈ {-1, 0, 1}² says which sides move.
     Resize { page: usize, index: usize, handle: (i8, i8), from: Pos2, aspect_ratio: Option<f32> },
+    /// Turning a stamp by its rotation handle, from the press position on screen; `base` is its
+    /// angle when the drag began (degrees counterclockwise in user space).
+    Rotate { page: usize, index: usize, from: Pos2, base: f32 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -657,6 +660,58 @@ fn resizable(a: &Annotation) -> bool {
 }
 
 const HANDLES: [(i8, i8); 8] = [(-1, -1), (0, -1), (1, -1), (1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0)];
+/// A turned stamp resizes from its corners only, keeping its proportions: stretching its
+/// bounding box from a side would skew the turned drawing.
+const CORNERS: [(i8, i8); 4] = [(-1, -1), (1, -1), (1, 1), (-1, 1)];
+
+fn handles(a: &Annotation) -> &'static [(i8, i8)] {
+    if a.rotation.is_some() { &CORNERS } else { &HANDLES }
+}
+
+/// Stamps turn by a handle above their frame (and only stamps: their drawing is kept whole).
+fn rotatable(a: &Annotation) -> bool {
+    a.subtype == "Stamp" && !a.locked
+}
+
+/// How far above the frame's top edge the rotation handle sits, in screen points.
+const ROTATE_HANDLE_GAP: f32 = 22.0;
+
+fn rotate_handle_pos(r: Rect) -> Pos2 {
+    pos2(r.center().x, r.top() - ROTATE_HANDLE_GAP)
+}
+
+/// The angle a rotation drag from `from` to `p` turns `a` to (degrees counterclockwise in user
+/// space, in (-180, 180]), measured about its centre; Shift snaps to 15°.
+fn dragged_angle(cx: &PageCx<'_>, a: &Annotation, base: f32, from: Pos2, p: Pos2, snap: bool) -> f32 {
+    let r = a.rect.map(f64::from);
+    let (ox, oy) = ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
+    let (u0, u1) = (cx.to_user(from), cx.to_user(p));
+    let turn = (u1[1] - oy).atan2(u1[0] - ox) - (u0[1] - oy).atan2(u0[0] - ox);
+    let mut angle = f64::from(base) + turn.to_degrees();
+    if !angle.is_finite() {
+        return base;
+    }
+    if snap {
+        angle = (angle / 15.0).round() * 15.0;
+    }
+    let angle = angle.rem_euclid(360.0);
+    (if angle > 180.0 { angle - 360.0 } else { angle }) as f32
+}
+
+/// The outline of `a` turned to `angle`, on screen: its unturned box about its centre.
+fn turned_outline(cx: &PageCx<'_>, a: &Annotation, angle: f32) -> Vec<Pos2> {
+    let r = a.rect.map(f64::from);
+    let (ox, oy) = ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
+    let [w, h] = a.rotation.map_or([r[2] - r[0], r[3] - r[1]], |(_, [w, h])| [f64::from(w), f64::from(h)]);
+    let (sin, cos) = f64::from(angle).to_radians().sin_cos();
+    [(-w, -h), (w, -h), (w, h), (-w, h)]
+        .into_iter()
+        .map(|(x, y)| {
+            let (x, y) = (x / 2.0, y / 2.0);
+            cx.to_screen([ox + x * cos - y * sin, oy + x * sin + y * cos])
+        })
+        .collect()
+}
 
 fn handle_pos(r: Rect, (hx, hy): (i8, i8)) -> Pos2 {
     let x = match hx {
@@ -968,7 +1023,7 @@ pub(crate) fn draw_grabs(ui: &egui::Ui, cx: &PageCx<'_>, view: &DocView) -> bool
         return false;
     }
     let cv = &view.comments;
-    if matches!(cv.gesture, Some(Gesture::Resize { page, .. }) if page == cx.page) {
+    if matches!(cv.gesture, Some(Gesture::Resize { page, .. } | Gesture::Rotate { page, .. }) if page == cx.page) {
         return true;
     }
     // A polygon being clicked out keeps its clicks, even near an old shape's handle.
@@ -984,7 +1039,8 @@ fn grabs(ui: &egui::Ui, cx: &PageCx<'_>, view: &DocView, pick: impl Fn(&Annotati
     if cx.hidden {
         return false;
     }
-    if matches!(view.comments.gesture, Some(Gesture::Move { page, .. } | Gesture::Resize { page, .. }) if page == cx.page) {
+    if matches!(view.comments.gesture, Some(Gesture::Move { page, .. } | Gesture::Resize { page, .. } | Gesture::Rotate { page, .. }) if page == cx.page)
+    {
         return true;
     }
     let Some(p) = press_point(ui, cx) else { return false };
@@ -998,14 +1054,12 @@ fn press_point(ui: &egui::Ui, cx: &PageCx<'_>) -> Option<Pos2> {
     (if down { origin } else { pointer }).filter(|p| cx.xf.rect.contains(*p))
 }
 
-/// Whether `p` is on a resize handle of the selected comment, when it is a resizable `pick`.
+/// Whether `p` is on a resize or rotation handle of the selected comment, when it is a `pick`.
 fn on_handle(cx: &PageCx<'_>, view: &DocView, p: Pos2, pick: impl Fn(&Annotation) -> bool) -> bool {
-    view.comments
-        .selected
-        .filter(|(page, _)| *page == cx.page)
-        .and_then(|(_, i)| cx.get(i))
-        .filter(|a| pick(a) && cx.allowed && resizable(a))
-        .is_some_and(|a| HANDLES.into_iter().any(|h| handle_pos(cx.screen_rect(a), h).distance(p) <= 7.0))
+    view.comments.selected.filter(|(page, _)| *page == cx.page).and_then(|(_, i)| cx.get(i)).filter(|a| pick(a) && cx.allowed).is_some_and(|a| {
+        let r = cx.screen_rect(a);
+        (resizable(a) && handles(a).iter().any(|h| handle_pos(r, *h).distance(p) <= 7.0)) || (rotatable(a) && rotate_handle_pos(r).distance(p) <= 8.0)
+    })
 }
 
 fn clamp_to(r: Rect, p: Pos2) -> Pos2 {
@@ -1028,11 +1082,17 @@ fn select_input(
     let handle_at = |p: Pos2| -> Option<(i8, i8)> {
         let a = selected.filter(|a| cx.allowed && resizable(a))?;
         let r = cx.screen_rect(a);
-        HANDLES.into_iter().find(|h| handle_pos(r, *h).distance(p) <= 7.0)
+        handles(a).iter().copied().find(|h| handle_pos(r, *h).distance(p) <= 7.0)
     };
+    let rotate_at =
+        |p: Pos2| selected.filter(|a| cx.allowed && rotatable(a)).is_some_and(|a| rotate_handle_pos(cx.screen_rect(a)).distance(p) <= 8.0);
     let mut consumed = false;
     if let Some(p) = pointer {
-        if let Some(h) = handle_at(p) {
+        if matches!(cv.gesture, Some(Gesture::Rotate { page, .. }) if page == cx.page) {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        } else if rotate_at(p) {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+        } else if let Some(h) = handle_at(p) {
             ui.ctx().set_cursor_icon(match h {
                 (0, _) => egui::CursorIcon::ResizeVertical,
                 (_, 0) => egui::CursorIcon::ResizeHorizontal,
@@ -1048,14 +1108,18 @@ fn select_input(
         && pressed_here
         && let Some(o) = origin
     {
-        if let (Some(h), Some(a)) = (handle_at(o), selected) {
+        if let Some(a) = selected.filter(|_| rotate_at(o)) {
+            cv.gesture = Some(Gesture::Rotate { page: cx.page, index: a.index, from: o, base: a.rotation.map_or(0.0, |(angle, _)| angle) });
+            consumed = true;
+        } else if let (Some(h), Some(a)) = (handle_at(o), selected) {
             // On screen, the image is also turned by the view's rotation.
             let turned = !cx.xf.rot.is_multiple_of(180);
             let aspect_ratio = view.signature_drag.aspect_ratio(cx.page, a.index).map(|ratio| if turned { ratio.recip() } else { ratio });
             // A drawn signature keeps its shape from the corners, as image signatures do.
+            // A turned stamp too: stretching its bounding box would skew it.
             let aspect_ratio = aspect_ratio.or_else(|| {
                 let r = cx.screen_rect(a);
-                (a.fill_sign && a.subtype == "Ink" && r.height() > 0.0).then(|| r.width() / r.height())
+                (((a.fill_sign && a.subtype == "Ink") || a.rotation.is_some()) && r.height() > 0.0).then(|| r.width() / r.height())
             });
             cv.gesture = Some(Gesture::Resize { page: cx.page, index: a.index, handle: h, from: o, aspect_ratio });
             consumed = true;
@@ -1070,7 +1134,7 @@ fn select_input(
             consumed = true;
         }
     }
-    if matches!(cv.gesture, Some(Gesture::Move { page, .. } | Gesture::Resize { page, .. }) if page == cx.page) {
+    if matches!(cv.gesture, Some(Gesture::Move { page, .. } | Gesture::Resize { page, .. } | Gesture::Rotate { page, .. }) if page == cx.page) {
         consumed = true;
     }
     if resp.drag_stopped()
@@ -1094,6 +1158,15 @@ fn select_input(
                     let rect = cx.rect_to_user(r);
                     if r.width() >= 4.0 && r.height() >= 4.0 {
                         view.pending_edit = Some(Edit::ResizeAnnotation { page, index, rect });
+                    }
+                }
+            }
+            Some(Gesture::Rotate { page, index, from, base }) if page == cx.page => {
+                cv.gesture = None;
+                if let Some(a) = cx.get(index) {
+                    let angle = dragged_angle(cx, a, base, from, p, ui.input(|i| i.modifiers.shift));
+                    if (angle - base).abs() >= 0.05 {
+                        view.pending_edit = Some(Edit::RotateAnnotation { page, index, angle: f64::from(angle) });
                     }
                 }
             }
@@ -1210,9 +1283,30 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
         let r = cx.adjusted_rect(a, cv.gesture.as_ref(), pointer, shift, view.pending_edit.as_ref()).expand(2.0);
         painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(1.0, SELECT_BLUE), egui::StrokeKind::Middle);
         if cx.allowed && resizable(a) {
-            for h in HANDLES {
-                let c = handle_pos(r, h);
+            for h in handles(a) {
+                let c = handle_pos(r, *h);
                 painter.circle(c, 4.5, Color32::WHITE, Stroke::new(1.0, SELECT_BLUE));
+            }
+        }
+        if cx.allowed && rotatable(a) {
+            // The rotation handle above the frame; while it is dragged, the stamp's outline at
+            // the new angle and the angle (clockwise, as shown) follow the pointer.
+            let knob = rotate_handle_pos(r);
+            painter.line_segment([pos2(r.center().x, r.top()), knob], Stroke::new(1.0, SELECT_BLUE));
+            painter.circle(knob, 5.0, SELECT_BLUE, Stroke::new(1.5, Color32::WHITE));
+            if let (Some(Gesture::Rotate { page: gp, index: gi, from, base }), Some(p)) = (cv.gesture.as_ref(), pointer)
+                && (*gp, *gi) == (page, index)
+            {
+                let angle = dragged_angle(cx, a, *base, *from, p, shift);
+                painter.add(egui::Shape::closed_line(turned_outline(cx, a, angle), Stroke::new(1.5, SELECT_BLUE)));
+                let shown = if angle == 0.0 { 0.0 } else { -angle };
+                let label = format!("{shown:.1}°");
+                let at = p + vec2(14.0, -14.0);
+                let font = egui::FontId::proportional(12.0);
+                let galley = painter.layout_no_wrap(label, font, Color32::WHITE);
+                let bg = Rect::from_min_size(at, galley.size()).expand(3.0);
+                painter.rect_filled(bg, CornerRadius::same(3), SELECT_BLUE);
+                painter.galley(at, galley, Color32::WHITE);
             }
         }
     }
@@ -1658,7 +1752,7 @@ pub(crate) fn context_menu(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo
                     // Multiply: white drops out and the colour darkens the text under it, like
                     // a pressed seal. It stays a comment, so it can be compared with the next.
                     let mut blended = a.ink_blend;
-                    if ui.checkbox(&mut blended, tl!("Blend Like Ink")).clicked() {
+                    if ui.add(crate::widgets::checkbox(&mut blended, tl!("Blend Like Ink"))).clicked() {
                         action = Some(CanvasAction::Edit(Box::new(Edit::InkBlendAnnotation { page, index, on: blended })));
                         ui.close();
                     }

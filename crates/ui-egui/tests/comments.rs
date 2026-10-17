@@ -1444,3 +1444,34 @@ fn text_box_properties_change_the_font_size() {
     assert_eq!(doc.comment_props(0, 0).unwrap().font_size, Some(30.0));
     assert_eq!(doc.can_undo(), Some("Change comment properties"));
 }
+
+#[test]
+fn a_stamp_turns_by_dragging_its_rotation_handle() {
+    let mut h = harness(|app| {
+        let id = app.views[0].id;
+        let shape = pdfcraft_engine::Shape::Stamp { rect: [100.0, 60.0, 200.0, 110.0], stamp: pdfcraft_engine::StampKind::Approved, by: None };
+        let style = pdfcraft_engine::Style::default_for(&shape);
+        let new = pdfcraft_engine::NewAnnotation { page: 0, shape, style, contents: String::new(), author: "Tester".into() };
+        app.session.apply(id, pdfcraft_engine::Edit::AddAnnotation(new)).unwrap();
+        app.set_option("quick", "select").unwrap();
+    });
+    settle(&mut h);
+    click_pt(&mut h, (150.0, 85.0));
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the stamp is selected");
+    // From the knob above the frame's top edge to the right of the centre: a quarter turn
+    // clockwise as shown, which is -90° (counterclockwise) in user space.
+    let (top, centre) = (at(&h, 150.0, 110.0), at(&h, 150.0, 85.0));
+    let knob = top - egui::vec2(0.0, 22.0);
+    drag(&mut h, knob, centre + egui::vec2((centre - knob).length(), 0.0));
+    let c = comments(&h);
+    let (angle, size) = c[0].rotation.expect("turned");
+    assert!((angle + 90.0).abs() < 1.0, "{angle}");
+    assert_eq!(size, [100.0, 50.0]);
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Rotate stamp"));
+    // Turned, its bounding box stands on end about the same centre.
+    let r = c[0].rect;
+    assert!(((r[2] - r[0]) - 50.0).abs() < 2.0 && ((r[3] - r[1]) - 100.0).abs() < 2.0, "{r:?}");
+    h.state_mut().undo();
+    h.run_steps(2);
+    assert_eq!(comments(&h)[0].rotation, None);
+}

@@ -1,13 +1,16 @@
 name: Build Windows app
 
 # A plain, unsigned Windows build of the desktop app for trying a branch out. Run it from the
-# Actions tab ("Run workflow"), or push to a feat/ branch; download "pdfcraft-windows" from the
-# run's Artifacts. release.yml stays the signed, packaged route.
+# Actions tab ("Run workflow"), or push to a feat/ or claude/ branch; download "pdfcraft-windows"
+# from the run's Artifacts. release.yml stays the signed, packaged route.
+#
+# Like official releases, it builds in the craft-fonts fallback fonts (CRAFT_FONTS_DIR), which
+# Edit text needs to write Chinese and Japanese characters into a PDF.
 
 on:
   workflow_dispatch:
   push:
-    branches: ["feat/**"]
+    branches: ["feat/**", "claude/**"]
 
 env:
   CARGO_TERM_COLOR: always
@@ -24,6 +27,20 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The same craft-fonts commit release.yml and ci.yml build with.
+      - name: Check out craft-fonts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: storytold/craft-fonts
+          ref: 3d9ab3a132ed0eff457e424226a435a901da30d3
+          path: craft-fonts
+
+      - name: Configure craft-fonts
+        shell: bash
+        run: |
+          echo "CRAFT_FONTS_DIR=$GITHUB_WORKSPACE/craft-fonts" >> "$GITHUB_ENV"
+          echo "CRAFT_FONTS_REQUIRED=1" >> "$GITHUB_ENV"
 
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:

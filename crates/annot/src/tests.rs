@@ -1423,3 +1423,90 @@ fn ink_blend_wraps_the_appearance_in_multiply_and_unwraps_it() {
     assert_eq!(normal_appearance(&doc, &annot_dict(&doc, annot)), Some(before), "the original is back");
     assert!(!ink_blended(&doc, &annot_dict(&doc, annot)));
 }
+
+#[test]
+fn rotate_stamp_turns_about_the_centre_and_back() {
+    let mut doc = fixture();
+    let stamp = Shape::Stamp { rect: [100.0, 100.0, 200.0, 150.0], stamp: StampKind::Approved, by: None };
+    let index = add_annotation(&mut doc, &new(0, stamp), &meta("rot")).unwrap();
+    let annot = annots(&doc, page_ref(&doc, 0).unwrap())[index].as_ref().unwrap();
+    let rect = |doc: &Document| annot_rect(doc, &annot_dict(doc, annot)).unwrap();
+    let close = |a: [f64; 4], b: [f64; 4]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-6);
+    let drawing = normal_appearance(&doc, &annot_dict(&doc, annot)).unwrap();
+
+    rotate_stamp(&mut doc, 0, index, 30.0, &meta("rot")).unwrap();
+    let d = annot_dict(&doc, annot);
+    assert_eq!(stamp_rotation(&doc, &d), Some((30.0, [100.0, 50.0])));
+    // A 100 × 50 box turned 30°: its bounding box, about the same centre (150, 125).
+    let (w, h) =
+        (100.0 * 30f64.to_radians().cos() + 50.0 * 30f64.to_radians().sin(), 100.0 * 30f64.to_radians().sin() + 50.0 * 30f64.to_radians().cos());
+    assert!(close(rect(&doc), [150.0 - w / 2.0, 125.0 - h / 2.0, 150.0 + w / 2.0, 125.0 + h / 2.0]), "{:?}", rect(&doc));
+    let wrapper = normal_appearance(&doc, &d).unwrap();
+    assert_eq!(rotation_original(&doc, wrapper), Some(drawing), "the drawing is kept, turned by a wrapper");
+    assert!(summaries(&doc).iter().any(|s| s.index == index && s.rotation == Some((30.0, [100.0, 50.0]))));
+
+    // Turning again starts from the same drawing, not from the wrapper; angles wrap.
+    rotate_stamp(&mut doc, 0, index, 350.0, &meta("rot")).unwrap();
+    let d = annot_dict(&doc, annot);
+    assert_eq!(stamp_rotation(&doc, &d).map(|(a, _)| a), Some(-10.0));
+    assert_eq!(drawing_appearance(&doc, &d), Some(drawing));
+
+    // Blend Like Ink wraps the turned drawing, and stays on through another turn.
+    set_ink_blend(&mut doc, 0, index, true).unwrap();
+    rotate_stamp(&mut doc, 0, index, 12.5, &meta("rot")).unwrap();
+    let d = annot_dict(&doc, annot);
+    assert!(ink_blended(&doc, &d));
+    assert_eq!(drawing_appearance(&doc, &d), Some(drawing));
+
+    // Resizing scales the unturned size with the bounding box.
+    let r = rect(&doc);
+    set_rect(&mut doc, 0, index, [r[0], r[1], r[0] + (r[2] - r[0]) * 2.0, r[1] + (r[3] - r[1]) * 2.0], &meta("rot")).unwrap();
+    let (_, [w, h]) = stamp_rotation(&doc, &annot_dict(&doc, annot)).unwrap();
+    assert!((w - 200.0).abs() < 1e-6 && (h - 100.0).abs() < 1e-6, "{w} × {h}");
+
+    // A restyle redraws it unturned in that size, then turns it again.
+    set_style(&mut doc, 0, index, Some([0.0, 0.5, 0.0]), None, None, None, &meta("rot")).unwrap();
+    let d = annot_dict(&doc, annot);
+    assert_eq!(stamp_rotation(&doc, &d).map(|(a, _)| a), Some(12.5));
+    let n = normal_appearance(&doc, &d).unwrap();
+    assert!(rotation_original(&doc, n).is_some(), "still turned after a restyle");
+
+    // Back upright: the unturned rectangle about the same centre, the plain drawing.
+    let c = rect(&doc);
+    let (cx, cy) = ((c[0] + c[2]) / 2.0, (c[1] + c[3]) / 2.0);
+    rotate_stamp(&mut doc, 0, index, 0.0, &meta("rot")).unwrap();
+    let d = annot_dict(&doc, annot);
+    assert_eq!(stamp_rotation(&doc, &d), None);
+    assert!(d.get(b"PCAngle").is_none() && d.get(b"PCRotSize").is_none());
+    assert!(close(rect(&doc), [cx - 100.0, cy - 50.0, cx + 100.0, cy + 50.0]), "{:?}", rect(&doc));
+    let n = normal_appearance(&doc, &d).unwrap();
+    assert!(rotation_original(&doc, n).is_none());
+
+    let doc = reopen(&doc);
+    assert_eq!(stamp_rotation(&doc, &list(&doc, 0)[index]), None);
+}
+
+#[test]
+fn rotate_stamp_refuses_what_it_cannot_turn() {
+    let mut doc = fixture();
+    let stamp = Shape::Stamp { rect: [100.0, 100.0, 200.0, 150.0], stamp: StampKind::Approved, by: None };
+    let index = add_annotation(&mut doc, &new(0, stamp), &meta("rot")).unwrap();
+    assert!(matches!(rotate_stamp(&mut doc, 0, index, f64::NAN, &meta("rot")), Err(AnnotError::Invalid(_))));
+    assert!(matches!(rotate_stamp(&mut doc, 0, index, f64::INFINITY, &meta("rot")), Err(AnnotError::Invalid(_))));
+    // The inline Square on page 1 is not a stamp.
+    assert!(matches!(rotate_stamp(&mut doc, 0, 0, 10.0, &meta("rot")), Err(AnnotError::Invalid(_))));
+    assert_eq!(rotate_stamp(&mut doc, 0, 99, 10.0, &meta("rot")), Err(AnnotError::NoSuchAnnotation { page: 0, index: 99 }));
+    // Another program's stamp with no appearance has no drawing to turn.
+    assert!(matches!(rotate_stamp(&mut doc, 1, 0, 10.0, &meta("rot")), Err(AnnotError::Invalid(_))));
+    set_locked(&mut doc, 0, index, true).unwrap();
+    assert!(matches!(rotate_stamp(&mut doc, 0, index, 10.0, &meta("rot")), Err(AnnotError::Invalid(_))));
+}
+
+#[test]
+fn normal_angle_wraps_into_a_half_turn_either_way() {
+    for (given, want) in
+        [(0.0, 0.0), (360.0, 0.0), (190.0, -170.0), (-190.0, 170.0), (180.0, 180.0), (-180.0, 180.0), (12.345, 12.35), (720.001, 0.0)]
+    {
+        assert_eq!(normal_angle(given), want, "{given}");
+    }
+}
