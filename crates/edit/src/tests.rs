@@ -1138,7 +1138,7 @@ fn japanese_paragraph_uses_unicode_type3_fallback() {
 /// whichever face an edit picks has them all. Without craft-fonts there are no faces, every character
 /// passes, and the text is still long.
 fn covered_japanese_chars(n: usize) -> String {
-    let faces = pdfcraft_fonts::document_japanese_fonts_for_style(false, false);
+    let faces = pdfcraft_fonts::document_cjk_fonts_for_style(false, false);
     (0x4E00..0xA000)
         .filter_map(char::from_u32)
         .filter(|ch| faces.iter().all(|face| pdfcraft_fonts::japanese_glyph_from(face, *ch).is_ok()))
@@ -1190,6 +1190,38 @@ fn japanese_replacement_over_240_unique_glyphs_is_split_across_fallback_fonts() 
     assert_eq!(glyphs, 300);
 }
 
+/// The Type 3 fallback font's family on the page: the face the replacement was drawn with.
+fn fallback_family(doc: &Document) -> Option<Vec<u8>> {
+    let fonts = fallback_fonts(doc);
+    let descriptor = doc.resolve(fonts.first()?.1.get(b"FontDescriptor")?);
+    descriptor.as_dict()?.get(b"FontFamily").and_then(|o| o.as_string()).map(|s| s.bytes.clone())
+}
+
+/// Chinese text with characters the Japanese faces lack (Simplified 欢 and 们, 发 and 亚) is
+/// written with the Chinese face, the whole line in that one face, and reads back. Text the
+/// Japanese faces draw whole keeps them, as they match the paragraph's style.
+#[test]
+fn chinese_replacement_the_japanese_faces_lack_uses_the_chinese_face() {
+    if without_craft_fonts("chinese_replacement_the_japanese_faces_lack_uses_the_chinese_face") {
+        return;
+    }
+    let Some(hans) = pdfcraft_fonts::CRAFT_FONTS.iter().find(|f| f.covers("Hans")) else {
+        eprintln!("skipping chinese_replacement_the_japanese_faces_lack_uses_the_chinese_face: craft-fonts has no Chinese face");
+        return;
+    };
+    for replacement in ["欢迎你们 2026", "马来西亚发展省"] {
+        let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+        text::replace_line(&mut doc, 0, 0, replacement).unwrap();
+        let reopened = reopen(&doc);
+        assert_eq!(text::text_lines(&reopened, 0).unwrap()[0].text, replacement);
+        assert_eq!(fallback_fonts(&reopened).len(), 1, "{replacement}");
+        assert_eq!(fallback_family(&reopened).as_deref(), Some(hans.family.as_bytes()), "{replacement}");
+    }
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+    text::replace_line(&mut doc, 0, 0, "公司章程").unwrap();
+    assert_ne!(fallback_family(&reopen(&doc)).as_deref(), Some(hans.family.as_bytes()), "the Japanese faces draw it whole");
+}
+
 /// A replacement whose last glyph no face draws (in a later font) changes nothing: neither the
 /// document nor a snapshot taken before the edit, which is what undo restores.
 #[test]
@@ -1198,7 +1230,7 @@ fn japanese_replacement_missing_a_glyph_after_240_changes_nothing() {
         return;
     }
     // The first CJK character that no face draws: the 242nd unique character, in a second font.
-    let faces = pdfcraft_fonts::document_japanese_fonts_for_style(false, false);
+    let faces = pdfcraft_fonts::document_cjk_fonts_for_style(false, false);
     let missing = (0x4E00u32..0x9FFF)
         .filter_map(char::from_u32)
         .find(|ch| faces.iter().all(|face| pdfcraft_fonts::japanese_glyph_from(face, *ch).is_err()))

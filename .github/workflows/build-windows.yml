@@ -28,12 +28,13 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # The same craft-fonts commit release.yml and ci.yml build with.
+      # The craft-fonts fork: release.yml and ci.yml's commit plus Droid Sans Fallback (Apache-2.0),
+      # the Chinese face for text the Japanese faces lack.
       - name: Check out craft-fonts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: storytold/craft-fonts
-          ref: 3d9ab3a132ed0eff457e424226a435a901da30d3
+          repository: barryluk/craft-fonts
+          ref: b8d3497a20167c41283df4c7c34d8e105cd43221
           path: craft-fonts
 
       - name: Configure craft-fonts
