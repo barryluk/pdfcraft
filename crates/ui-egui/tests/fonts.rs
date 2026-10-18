@@ -72,6 +72,15 @@ fn chinese_ui_text_prefers_the_chinese_face() {
     for w in layout_widths(&mut fonts, CHINESE) {
         assert!(w > 13.0 * 0.8 * CHINESE.chars().count() as f32, "{w}");
     }
+    // An English interface draws Chinese with the Chinese face too (a file name, document text);
+    // only a Japanese one puts its own faces first.
+    for (cjk, chinese_first) in [(theme::CjkPreference::Default, true), (theme::CjkPreference::Japanese, false)] {
+        let defs = theme::installed_font_definitions(cjk);
+        let stack = &defs.families[&FontFamily::Proportional];
+        let first_zh = stack.iter().position(|n| hans.iter().any(|h| h == n)).expect("a Hans face is a fallback");
+        let first_ja = stack.iter().position(|n| n.starts_with("BIZ UDPGothic")).expect("BIZ UDPGothic is a fallback");
+        assert_eq!(first_zh < first_ja, chinese_first, "{cjk:?}: {stack:?}");
+    }
 }
 
 /// Built with a craft-fonts Arabic face, Arabic text has real glyphs in every family, from a
@@ -136,7 +145,9 @@ fn system_fallback_fills_missing_scripts() {
         return;
     }
     for (family, stack) in &defs.families {
-        assert_eq!(stack.last().map(String::as_str), Some(theme::SYSTEM_FALLBACK), "{family:?}: {stack:?}");
+        // Only the installed Chinese face may follow it (a build without CJK faces).
+        let last = stack.iter().rev().find(|n| *n != theme::SYSTEM_HAN_FALLBACK);
+        assert_eq!(last.map(String::as_str), Some(theme::SYSTEM_FALLBACK), "{family:?}: {stack:?}");
         assert_eq!(stack.iter().filter(|n| *n == theme::SYSTEM_FALLBACK).count(), 1, "{family:?}");
     }
     let mut fonts = Fonts::new(TextOptions::default(), defs);
@@ -271,7 +282,44 @@ fn chinese_ui_uses_an_installed_chinese_face() {
     // Other languages keep the installed face last, as before.
     let defs = theme::installed_font_definitions(theme::CjkPreference::Default);
     for stack in defs.families.values() {
-        assert!(stack.iter().position(|n| n == theme::SYSTEM_FALLBACK).is_none_or(|i| i + 1 == stack.len()), "{stack:?}");
+        let end = stack.len() - usize::from(stack.last().is_some_and(|n| n == theme::SYSTEM_HAN_FALLBACK));
+        assert!(stack.iter().position(|n| n == theme::SYSTEM_FALLBACK).is_none_or(|i| i + 1 == end), "{stack:?}");
+    }
+}
+
+/// A Chinese file name draws in an English interface when the system has a Chinese face, also
+/// its Simplified-only characters (发, 亚, 责), which the Japanese craft-fonts faces lack: the
+/// installed face goes before them, so the whole name is drawn in it. A Japanese interface keeps
+/// its own faces first and has the Chinese face last.
+#[test]
+fn chinese_file_names_draw_in_an_english_interface() {
+    const NAME: &str = "马来西亚发展省直辖名称责任公司章程";
+    // A Chinese interface takes the installed Chinese face as its fallback, when there is one.
+    let installed = theme::installed_font_definitions(theme::CjkPreference::SimplifiedChinese).font_data.contains_key(theme::SYSTEM_FALLBACK);
+    if !pdfcraft_fonts::ui_chinese_fonts().is_empty() || !installed {
+        eprintln!("skipping chinese_file_names_draw_in_an_english_interface: a Hans face is bundled, or no installed Chinese face");
+        return;
+    }
+    let defs = theme::installed_font_definitions(theme::CjkPreference::Default);
+    for (family, stack) in &defs.families {
+        let han = stack.iter().position(|n| n == theme::SYSTEM_HAN_FALLBACK).expect("in every family");
+        if let Some(first_ja) = stack.iter().position(|n| n.starts_with("BIZ UDPGothic")) {
+            assert!(han < first_ja, "{family:?}: {stack:?}");
+        }
+        let own = stack.iter().position(|n| n.starts_with("Inter") || n == "JetBrainsMono").expect("the app's own font");
+        assert!(own < han, "{family:?}: {stack:?}");
+    }
+    let mut fonts = Fonts::new(TextOptions::default(), defs);
+    for id in families() {
+        assert!(fonts.has_glyphs(&id, NAME), "{id:?}");
+    }
+    let defs = theme::installed_font_definitions(theme::CjkPreference::Japanese);
+    for (family, stack) in &defs.families {
+        assert_eq!(stack.last().map(String::as_str), Some(theme::SYSTEM_HAN_FALLBACK), "{family:?}: {stack:?}");
+    }
+    let mut fonts = Fonts::new(TextOptions::default(), defs);
+    for id in families() {
+        assert!(fonts.has_glyphs(&id, NAME), "{id:?}");
     }
 }
 

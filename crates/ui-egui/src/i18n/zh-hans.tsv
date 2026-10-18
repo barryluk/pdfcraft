@@ -2397,3 +2397,12 @@ animation effects	Off	关
 	Make properties default	将属性设为默认
 	Pages selected	选定的页面
 	Page properties	页面属性
+	Arrange	排列
+	Bring to Front	置于顶层
+	Bring Forward	上移一层
+	Send Backward	下移一层
+	Send to Back	置于底层
+	Place Behind Text	置于文字下方
+	Blend Like Ink	像墨水一样混合
+	Stop Blending Like Ink	取消墨水混合
+	Rotate stamp	旋转图章

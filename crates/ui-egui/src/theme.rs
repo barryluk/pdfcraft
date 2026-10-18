@@ -189,9 +189,13 @@ pub fn install_fonts(ctx: &egui::Context) {
 /// The interface language's claim on the CJK fallback faces.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum CjkPreference {
-    /// Japanese faces first (every non-Chinese language).
+    /// Every language that is neither Chinese nor Japanese. The embedded Japanese faces come
+    /// first, but an installed Chinese face, when the build has no `Hans` face, goes before them
+    /// (see [`installed_font_definitions`]).
     #[default]
     Default,
+    /// The Japanese interface: Japanese faces first, an installed Chinese face last.
+    Japanese,
     SimplifiedChinese,
     TraditionalChinese,
 }
@@ -202,6 +206,7 @@ impl CjkPreference {
         match code {
             "zh-hans" => Self::SimplifiedChinese,
             "zh-hant" => Self::TraditionalChinese,
+            "ja" => Self::Japanese,
             _ => Self::Default,
         }
     }
@@ -216,6 +221,10 @@ pub fn install_fonts_for(ctx: &egui::Context, cjk: CjkPreference) {
 
 /// The name of the installed face [`installed_font_definitions`] may add after the embedded ones.
 pub const SYSTEM_FALLBACK: &str = "system-fallback";
+/// The installed Chinese face when the interface is not Chinese and the build embeds no `Hans`
+/// face: before the Japanese faces, or last in a Japanese interface (see
+/// [`installed_font_definitions`]).
+pub const SYSTEM_HAN_FALLBACK: &str = "system-han-fallback";
 /// The name of the installed Devanagari (Hindi) face [`installed_font_definitions`] may add.
 pub const SYSTEM_DEVANAGARI_FALLBACK: &str = "system-devanagari-fallback";
 /// The name of the installed Telugu face [`installed_font_definitions`] may add.
@@ -235,6 +244,9 @@ pub const SYSTEM_TAMIL_FALLBACK: &str = "system-tamil-fallback";
 ///   baseline.
 /// - Otherwise it is the last fallback of every family (an Arabic file name in a build without
 ///   craft-fonts).
+/// - Outside a Chinese interface, in a build without a `Hans` face, an installed Chinese face is
+///   added too, for Chinese file names and document text: before the Japanese faces, which lack
+///   the Simplified-only characters, or last in a Japanese interface.
 ///
 /// Installed Devanagari, Telugu, Sinhala and Tamil faces, when there are, end every family just
 /// before that one, so Hindi, Telugu (#1531), Sinhala and Tamil (#1688) text, such as a file
@@ -243,7 +255,7 @@ pub const SYSTEM_TAMIL_FALLBACK: &str = "system-tamil-fallback";
 /// `PDFCRAFT_SYSTEM_FONTS=0` leaves them out.
 pub fn installed_font_definitions(cjk: CjkPreference) -> FontDefinitions {
     #[cfg_attr(target_arch = "wasm32", expect(unused_mut))]
-    let mut fonts = font_definitions_for(cjk == CjkPreference::SimplifiedChinese);
+    let mut fonts = font_definitions_for(cjk != CjkPreference::Japanese);
     #[cfg(not(target_arch = "wasm32"))]
     {
         use crate::system_fonts::{Need, fallback};
@@ -264,7 +276,7 @@ pub fn installed_font_definitions(cjk: CjkPreference) -> FontDefinitions {
             _ if !pdfcraft_fonts::ui_chinese_fonts().is_empty() => Need::Other,
             CjkPreference::SimplifiedChinese => Need::Hans,
             CjkPreference::TraditionalChinese => Need::Hant,
-            CjkPreference::Default => Need::Other,
+            CjkPreference::Default | CjkPreference::Japanese => Need::Other,
         };
         if let Some(data) = fallback(need) {
             fonts.font_data.insert(SYSTEM_FALLBACK.to_owned(), data);
@@ -275,6 +287,23 @@ pub fn installed_font_definitions(cjk: CjkPreference) -> FontDefinitions {
                     Need::Hans | Need::Hant => stack.iter().position(|n| japanese.contains(n)),
                 };
                 stack.insert(at.unwrap_or(stack.len()), SYSTEM_FALLBACK.to_owned());
+            }
+        }
+        // Chinese text outside a Chinese interface (a file name, a document's text in the text
+        // editor) in a build without a `Hans` face: the installed Chinese face draws it. The
+        // Japanese faces lack the Simplified-only characters (发, 亚, 责, …), and a line drawn
+        // from both would mix two designs, so outside a Japanese interface the Chinese face goes
+        // before them and draws all Han text. A Japanese interface keeps its own faces and has the
+        // Chinese one last, for the characters they lack.
+        if matches!(need, Need::Other)
+            && pdfcraft_fonts::ui_chinese_fonts().is_empty()
+            && let Some(data) = fallback(Need::Hans)
+        {
+            fonts.font_data.insert(SYSTEM_HAN_FALLBACK.to_owned(), data);
+            let japanese: Vec<String> = pdfcraft_fonts::ui_japanese_fonts().iter().map(|f| f.name()).collect();
+            for stack in fonts.families.values_mut() {
+                let at = if cjk == CjkPreference::Japanese { None } else { stack.iter().position(|n| japanese.contains(n)) };
+                stack.insert(at.unwrap_or(stack.len()), SYSTEM_HAN_FALLBACK.to_owned());
             }
         }
     }
@@ -289,8 +318,8 @@ pub fn font_definitions() -> FontDefinitions {
     font_definitions_for(false)
 }
 
-/// [`font_definitions`] with the CJK fallback order for the UI language. Simplified Chinese
-/// must come first in Chinese mode: otherwise shared characters render in the Japanese face
+/// [`font_definitions`] with the CJK fallback order for the UI language. A `Hans` face comes
+/// first in every interface but a Japanese one (`prefer_hans`): otherwise shared characters render in the Japanese face
 /// while Simplified-only characters (e.g. U+6B22 欢) fall through to the Chinese face, and
 /// the mixed vertical metrics sink them below the line.
 pub fn font_definitions_for(prefer_hans: bool) -> FontDefinitions {

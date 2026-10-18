@@ -140,8 +140,8 @@ pub use links::{
 pub use pdfcraft_annot::appearance as annot_text;
 pub use pdfcraft_annot::links::{Highlight as LinkHighlight, LinkAction, LinkItem, LinkStyle};
 pub use pdfcraft_annot::{
-    AppearanceCache, AttachIcon, FillMark, LineEnding, Markup, NOTE_SIZE, NewAnnotation, NoteIcon, OverlayFont, OverlayLook, Props as CommentProps,
-    ReviewState, Rgb, Shape, StampGroup, StampKind, Style, rect_quad,
+    AppearanceCache, Arrange, AttachIcon, FillMark, LineEnding, Markup, NOTE_SIZE, NewAnnotation, NoteIcon, OverlayFont, OverlayLook,
+    Props as CommentProps, ReviewState, Rgb, Shape, StampGroup, StampKind, Style, arrange_destination, rect_quad,
 };
 pub use pdfcraft_forms::detect;
 pub use pdfcraft_optimize as optimize;
@@ -260,6 +260,9 @@ fn scope_of(edit: &Edit) -> Scope {
         | Edit::SetAnnotationStatus { .. }
         | Edit::MarkAnnotation { .. }
         | Edit::LockAnnotation { .. }
+        | Edit::ArrangeAnnotation { .. }
+        | Edit::InkBlendAnnotation { .. }
+        | Edit::RotateAnnotation { .. }
         | Edit::ReplaceText { .. }
         | Edit::EraseInk { .. }
         | Edit::MoveAnnotation { .. }
@@ -1392,6 +1395,32 @@ pub enum Edit {
         marked: bool,
         author: String,
     },
+    /// Place Behind Text: draw the comment at `index` (a stamp, say) underneath the page's
+    /// existing text and lines, as page content. It stops being a comment.
+    PlaceBehindText {
+        page: usize,
+        index: usize,
+    },
+    /// Blend Like Ink: draw the comment in the Multiply blend mode (white drops out, colour darkens
+    /// what is under it), or stop. It stays a comment.
+    InkBlendAnnotation {
+        page: usize,
+        index: usize,
+        on: bool,
+    },
+    /// Turn a stamp to `angle` degrees (counterclockwise in user space, about its centre; 0 is
+    /// upright), as its rotation handle does.
+    RotateAnnotation {
+        page: usize,
+        index: usize,
+        angle: f64,
+    },
+    /// Arrange: move the comment at `index` in its page's stacking order (`/Annots`).
+    ArrangeAnnotation {
+        page: usize,
+        index: usize,
+        how: Arrange,
+    },
     /// Properties ▸ Locked.
     LockAnnotation {
         page: usize,
@@ -1841,6 +1870,14 @@ pub const EDIT_LABELS: &[&str] = &[
     "Mark with checkmark",
     "Remove checkmark",
     "Lock comment",
+    "Bring to Front",
+    "Bring Forward",
+    "Send Backward",
+    "Send to Back",
+    "Place Behind Text",
+    "Blend Like Ink",
+    "Stop Blending Like Ink",
+    "Rotate stamp",
     "Unlock comment",
     "Move comment",
     "Resize comment",
@@ -1965,6 +2002,11 @@ impl Edit {
             Edit::MarkAnnotation { .. } => Label::of("Remove checkmark"),
             Edit::LockAnnotation { locked: true, .. } => Label::of("Lock comment"),
             Edit::LockAnnotation { .. } => Label::of("Unlock comment"),
+            Edit::ArrangeAnnotation { how, .. } => Label::of(how.name()),
+            Edit::PlaceBehindText { .. } => Label::of("Place Behind Text"),
+            Edit::InkBlendAnnotation { on: true, .. } => Label::of("Blend Like Ink"),
+            Edit::InkBlendAnnotation { .. } => Label::of("Stop Blending Like Ink"),
+            Edit::RotateAnnotation { .. } => Label::of("Rotate stamp"),
             Edit::MoveAnnotation { .. } => Label::of("Move comment"),
             Edit::ResizeAnnotation { .. } => Label::of("Resize comment"),
             Edit::StyleAnnotation { .. } | Edit::FillAnnotation { .. } | Edit::FontSizeAnnotation { .. } | Edit::SetAnnotationInfo { .. } => {
@@ -2119,6 +2161,9 @@ fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Result<(), Ed
         | Edit::ReplaceText { .. }
         | Edit::EraseInk { .. }
         | Edit::LockAnnotation { .. }
+        | Edit::ArrangeAnnotation { .. }
+        | Edit::InkBlendAnnotation { .. }
+        | Edit::RotateAnnotation { .. }
         | Edit::MoveAnnotation { .. }
         | Edit::ResizeAnnotation { .. }
         | Edit::StyleAnnotation { .. }
@@ -2191,6 +2236,7 @@ fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Result<(), Ed
         | Edit::RegisterTextFont { .. }
         | Edit::EditPageImage { .. }
         | Edit::Flatten { .. }
+        | Edit::PlaceBehindText { .. }
         | Edit::FlattenFillSign => {
             if p.modify() {
                 Ok(())
@@ -2358,7 +2404,8 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
             };
             let shape = Shape::CustomStamp { rect, name: name.clone(), picture: src.xobject, image: src.image, size: (sw, sh) };
             let style = pdfcraft_annot::Style::default_for(&shape);
-            let new = NewAnnotation { page: *page, shape, style, contents: name.clone(), author: author.clone() };
+            // No comment text: the stamp is the mark itself (its name stays in `/Name`).
+            let new = NewAnnotation { page: *page, shape, style, contents: String::new(), author: author.clone() };
             let index = pdfcraft_annot::add_annotation(doc, &new, &cx.meta())?;
             pdfcraft_annot::orient_image_stamp(doc, *page, index, rotation)?;
         }
@@ -2380,6 +2427,11 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
             pdfcraft_annot::set_marked(doc, *page, *index, *marked, author, &cx.meta())?;
         }
         Edit::LockAnnotation { page, index, locked } => pdfcraft_annot::set_locked(doc, *page, *index, *locked)?,
+        Edit::InkBlendAnnotation { page, index, on } => pdfcraft_annot::set_ink_blend(doc, *page, *index, *on)?,
+        Edit::RotateAnnotation { page, index, angle } => pdfcraft_annot::rotate_stamp(doc, *page, *index, *angle, &cx.meta())?,
+        Edit::ArrangeAnnotation { page, index, how } => {
+            pdfcraft_annot::arrange_annotation(doc, *page, *index, *how)?;
+        }
         Edit::MoveAnnotation { page, index, dx, dy } => pdfcraft_annot::move_annotation(doc, *page, *index, *dx, *dy, &cx.meta())?,
         Edit::ResizeAnnotation { page, index, rect } => pdfcraft_annot::set_rect(doc, *page, *index, *rect, &cx.meta())?,
         Edit::StyleAnnotation { page, index, color, opacity, width, endings } => {
@@ -2655,6 +2707,7 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
             }
             strip_xfa(doc, cx)?;
         }
+        Edit::PlaceBehindText { page, index } => pdfcraft_edit::place_behind_content(doc, *page, *index)?,
         Edit::FlattenFillSign => {
             let n = pdfcraft_model::pages(doc).len();
             pdfcraft_edit::flatten_fill_sign(doc, &(0..n).collect::<Vec<_>>())?;
@@ -2710,6 +2763,8 @@ fn comment_list(doc: &pdfcraft_cos::Document) -> Vec<pdfcraft_render::Annotation
             locked: s.locked,
             intent: s.intent,
             fill_sign: s.fill_sign,
+            ink_blend: s.ink_blend,
+            rotation: s.rotation.map(|(a, [w, h])| (a as f32, [w as f32, h as f32])),
         })
         .collect()
 }

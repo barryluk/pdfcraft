@@ -17,6 +17,7 @@ use crate::{EditError, check, n, page_list, place_tagged};
 
 const HIDDEN: i64 = 2;
 const NO_VIEW: i64 = 32;
+const LOCKED: i64 = 128;
 
 fn nums(doc: &Document, o: Option<&Object>) -> Option<Vec<f64>> {
     let o = doc.resolve(o?);
@@ -58,9 +59,12 @@ enum Which {
     Comments { comments: bool, fields: bool },
     /// Fill & Sign text, marks and signatures only.
     FillSign,
+    /// One comment, drawn behind the page's existing content (Place Behind Text).
+    Behind(ObjRef),
 }
 
-fn selected(doc: &Document, d: &Dict, which: Which) -> bool {
+/// Whether `which` flattens the annotation `d`, listed in `/Annots` as `entry`.
+fn selected(doc: &Document, entry: &Object, d: &Dict, which: Which) -> bool {
     let subtype = d.name(b"Subtype").unwrap_or_default();
     match which {
         Which::Comments { comments, fields } => {
@@ -68,6 +72,7 @@ fn selected(doc: &Document, d: &Dict, which: Which) -> bool {
             !matches!(subtype, b"Link" | b"Popup") && (!widget || fields) && (widget || comments)
         }
         Which::FillSign => !matches!(subtype, b"Link" | b"Popup" | b"Widget") && pdfcraft_annot::is_fill_sign(doc, d),
+        Which::Behind(target) => !matches!(subtype, b"Link" | b"Popup" | b"Widget") && entry.as_ref() == Some(target),
     }
 }
 
@@ -98,6 +103,32 @@ pub fn flatten_fill_sign(doc: &mut Document, pages: &[usize]) -> Result<usize, E
     flatten_which(doc, pages, Which::FillSign)
 }
 
+/// Place Behind Text: draw the comment at `index` in page `page`'s `/Annots` (a stamp, typically)
+/// underneath everything already on the page, so the page's text and lines show over it, and
+/// remove the comment with its pop-up and replies. The result is page content: it can no longer
+/// be selected, moved or deleted as a comment (undo restores it). PDF viewers always draw
+/// comments over page content (ISO 32000-2 §12.5), so this is the only way to put one under it.
+pub fn place_behind_content(doc: &mut Document, page: usize, index: usize) -> Result<(), EditError> {
+    let all = page_list(doc);
+    check(&[page], all.len())?;
+    let list = all.get(page).and_then(|p| p.dict.get(b"Annots")).map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default();
+    let entry = list.get(index).ok_or_else(|| EditError::Invalid(format!("there is no comment {index} on page {}", page.saturating_add(1))))?;
+    // Comments the app makes are indirect; an inline one has no identity to pick it by.
+    let target = entry.as_ref().ok_or_else(|| EditError::Invalid("this comment can't be placed behind the text (it is stored inline)".into()))?;
+    let d = doc.resolve(entry).as_dict().cloned().unwrap_or_default();
+    let flags = d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
+    if flags & LOCKED != 0 {
+        return Err(EditError::Invalid("the comment is locked".into()));
+    }
+    if !selected(doc, entry, &d, Which::Behind(target)) {
+        return Err(EditError::Invalid("only a comment can be placed behind the text".into()));
+    }
+    if flatten_which(doc, &[page], Which::Behind(target))? == 0 {
+        return Err(EditError::Invalid("this comment has nothing that can be drawn into the page".into()));
+    }
+    Ok(())
+}
+
 /// The first annotation flattening would turn into page content with `?` in it, before anything
 /// changes: one whose appearance PdfCraft drew with `?` for characters its fonts can't draw
 /// (`pdfcraft_fonts::UNDRAWN_MARK`: a form field's value, a comment's text), or a comment without
@@ -109,7 +140,7 @@ fn undrawn_on(doc: &Document, all: &[pdfcraft_model::Page], pages: &[usize], whi
         for entry in &list {
             let Some(d) = doc.resolve(entry).as_dict().cloned() else { continue };
             let flags = d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
-            if !selected(doc, &d, which) || flags & (HIDDEN | NO_VIEW) != 0 {
+            if !selected(doc, entry, &d, which) || flags & (HIDDEN | NO_VIEW) != 0 {
                 continue;
             }
             let widget = d.name(b"Subtype") == Some(b"Widget");
@@ -164,7 +195,7 @@ fn flatten_which(doc: &mut Document, pages: &[usize], which: Which) -> Result<us
             let Some(r) = entry.as_ref() else { continue };
             let d = doc.resolve(entry).as_dict().cloned().unwrap_or_default();
             let subtype = d.name(b"Subtype").unwrap_or_default();
-            if subtype == b"Widget" || !selected(doc, &d, which) {
+            if subtype == b"Widget" || !selected(doc, entry, &d, which) {
                 continue;
             }
             let flags = d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
@@ -181,7 +212,7 @@ fn flatten_which(doc: &mut Document, pages: &[usize], which: Which) -> Result<us
             let Some(d) = obj.as_dict() else { continue };
             let subtype = d.name(b"Subtype").unwrap_or_default();
             let widget = subtype == b"Widget";
-            if !selected(doc, d, which) {
+            if !selected(doc, entry, d, which) {
                 continue;
             }
             let flags = d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
@@ -260,7 +291,8 @@ fn flatten_which(doc: &mut Document, pages: &[usize], which: Which) -> Result<us
             res.set(b"XObject".to_vec(), Object::Dict(xo));
             doc.update_dict(page.obj, |d| d.set(b"Resources".to_vec(), Object::Dict(res)))?;
             let page = page_list(doc)[i].clone();
-            place_tagged(doc, &page, "Flattened", content.into_bytes(), false)?;
+            // Behind: first in /Contents, so all of the page's own text and lines draw over it.
+            place_tagged(doc, &page, "Flattened", content.into_bytes(), matches!(which, Which::Behind(_)))?;
         }
         let page_now = page_list(doc)[i].clone();
         match page_now.dict.get(b"Annots").and_then(|a| a.as_ref()).filter(|r| doc.get(*r).as_array().is_some()) {

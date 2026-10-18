@@ -1,0 +1,60 @@
+name: Build Windows app
+
+# A plain, unsigned Windows build of the desktop app for trying a branch out. Run it from the
+# Actions tab ("Run workflow"), or push to a feat/ or claude/ branch; download "pdfcraft-windows"
+# from the run's Artifacts. release.yml stays the signed, packaged route.
+#
+# Like official releases, it builds in the craft-fonts fallback fonts (CRAFT_FONTS_DIR), which
+# Edit text needs to write Chinese and Japanese characters into a PDF.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["feat/**", "claude/**"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+concurrency:
+  group: build-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The craft-fonts fork: release.yml and ci.yml's commit plus Droid Sans Fallback (Apache-2.0),
+      # the Chinese face for text the Japanese faces lack.
+      - name: Check out craft-fonts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: barryluk/craft-fonts
+          ref: b8d3497a20167c41283df4c7c34d8e105cd43221
+          path: craft-fonts
+
+      - name: Configure craft-fonts
+        shell: bash
+        run: |
+          echo "CRAFT_FONTS_DIR=$GITHUB_WORKSPACE/craft-fonts" >> "$GITHUB_ENV"
+          echo "CRAFT_FONTS_REQUIRED=1" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Build
+        run: cargo build --release -p pdfcraft
+
+      - name: Upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pdfcraft-windows
+          path: target/release/pdfcraft.exe
+          if-no-files-found: error

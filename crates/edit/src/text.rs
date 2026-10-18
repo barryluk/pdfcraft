@@ -1466,12 +1466,13 @@ fn no_hebrew_font() -> EditError {
 }
 
 /// The faces a Type 3 replacement may draw `text` with, best first. Text with Hebrew takes the
-/// Hebrew face first (its Latin and digits too, so a line keeps one look), then the Japanese
-/// faces for anything it lacks; other text takes the Japanese faces, as before.
+/// Hebrew face first (its Latin and digits too, so a line keeps one look), then the CJK faces
+/// for anything it lacks; other text takes the CJK faces: the Japanese ones, which match the
+/// paragraph's style, then the Chinese one for text they can't draw whole.
 fn type3_faces(text: &str, family: crate::added::Family, bold: bool) -> Result<(Vec<&'static CraftFont>, bool), EditError> {
-    let japanese = pdfcraft_fonts::document_japanese_fonts_for_style(family == crate::added::Family::Times, bold);
+    let cjk = pdfcraft_fonts::document_cjk_fonts_for_style(family == crate::added::Family::Times, bold);
     if !text.chars().any(crate::bidi::is_hebrew) {
-        return Ok((japanese, false));
+        return Ok((cjk, false));
     }
     // Points are drawn on their letter with the font's positioning, which a one-glyph-per-
     // character Type 3 font can't do; refuse rather than print them beside the letter.
@@ -1479,7 +1480,7 @@ fn type3_faces(text: &str, family: crate::added::Family, bold: bool) -> Result<(
         return Err(EditError::Invalid("Hebrew points (niqqud) can't be written into a PDF yet; type the text without them".into()));
     }
     let hebrew = pdfcraft_fonts::document_hebrew_font(bold).ok_or_else(no_hebrew_font)?;
-    Ok((std::iter::once(hebrew).chain(japanese).collect(), true))
+    Ok((std::iter::once(hebrew).chain(cjk).collect(), true))
 }
 
 fn type3_font(

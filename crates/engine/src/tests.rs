@@ -294,6 +294,46 @@ fn assert_upright_quadrants(session: &Session, id: DocId, degrees: i64) {
     }
 }
 
+/// A picture stamp turned a quarter by its rotation handle reads turned that way as displayed,
+/// on every page rotation; it carries no comment text, and undo puts it back upright.
+#[test]
+fn picture_stamps_turn_by_the_rotation_handle_on_rotated_pages() {
+    let bytes = quadrant_png();
+    let colours = [[240, 20, 20, 255], [20, 180, 20, 255], [20, 20, 240, 255], [230, 180, 20, 255]];
+    for degrees in [0, 90, 180, 270] {
+        let (mut session, id) = rotated_blank(degrees);
+        let info = session.get(id).unwrap().info.pages[0].clone();
+        let rect = displayed_rect(&info, 100.0, 100.0, 80.0, 40.0);
+        let file = MarkFile { name: "quadrants.png".into(), bytes: bytes.clone(), page: 0 };
+        session.apply(id, Edit::AddCustomStamp { page: 0, rect, name: "Seal".into(), file, author: "Test".into() }).unwrap();
+        assert_eq!(session.get(id).unwrap().info.annotations[0].contents, None, "a stamp adds no comment text");
+        session.apply(id, Edit::RotateAnnotation { page: 0, index: 0, angle: 90.0 }).unwrap();
+        let a = session.get(id).unwrap().info.annotations[0].clone();
+        // The unturned size is in user space: 80 × 40 as displayed, turned with the page.
+        let (angle, [w, h]) = a.rotation.unwrap();
+        let (w, h) = if degrees % 180 == 0 { (w, h) } else { (h, w) };
+        assert!(angle == 90.0 && (w - 80.0).abs() < 0.01 && (h - 40.0).abs() < 0.01, "rotation {degrees}: {:?}", a.rotation);
+        let rendered = render_page(&session, id);
+        // Turned a quarter counterclockwise about (100, 100): red top-left goes bottom-left,
+        // green top-right goes top-left, blue bottom-left goes bottom-right, yellow top-right.
+        for ((x, y), colour) in [(90, 120), (90, 80), (110, 120), (110, 80)].into_iter().zip(colours) {
+            assert_eq!(stamp_pixel(&rendered, x * 2, y * 2), colour, "rotation {degrees}; displayed point ({x}, {y})");
+        }
+        // Blended like ink, then placed behind the text, it stays turned.
+        session.apply(id, Edit::InkBlendAnnotation { page: 0, index: 0, on: true }).unwrap();
+        session.apply(id, Edit::PlaceBehindText { page: 0, index: 0 }).unwrap();
+        assert!(session.get(id).unwrap().info.annotations.is_empty());
+        let rendered = render_page(&session, id);
+        for ((x, y), colour) in [(90, 120), (90, 80), (110, 120), (110, 80)].into_iter().zip(colours) {
+            assert_eq!(stamp_pixel(&rendered, x * 2, y * 2), colour, "behind text, rotation {degrees}; displayed point ({x}, {y})");
+        }
+        for _ in 0..3 {
+            session.undo(id).unwrap();
+        }
+        assert_upright_quadrants(&session, id, degrees);
+    }
+}
+
 /// #1398: an explicit rectangle keeps the caller's box and turns the picture upright.
 #[test]
 fn explicit_image_stamps_keep_displayed_orientation_on_rotated_pages() {
@@ -1434,6 +1474,50 @@ fn comments_are_added_drawn_threaded_and_undone() {
     assert_eq!(s.get(id).unwrap().info.annotations.len(), 1);
     let px = pixel(&s, id, 1, 100, 100);
     assert!(px[0] > 200 && px[1] < 40, "back where it was: {px:?}");
+}
+
+/// Arrange changes which of two overlapping comments is drawn on top, and undoes.
+#[test]
+fn arrange_changes_the_stacking_order_and_undoes() {
+    let (mut s, id) = session_with(1);
+    s.apply(id, rect_comment(0, [80.0, 80.0, 120.0, 120.0])).unwrap();
+    let blue = Edit::AddAnnotation(NewAnnotation {
+        page: 0,
+        shape: Shape::Rectangle { rect: [90.0, 90.0, 130.0, 130.0] },
+        style: Style { color: [0.0, 0.0, 1.0], opacity: 1.0, width: 2.0, fill: Some([0.0, 0.0, 1.0]) },
+        contents: String::new(),
+        author: "Reviewer".into(),
+    });
+    s.apply(id, blue).unwrap();
+    let on_top = |s: &Session| {
+        let px = pixel(s, id, 0, 105, 105);
+        if px[2] > 200 && px[0] < 40 {
+            "blue"
+        } else if px[0] > 200 && px[2] < 40 {
+            "red"
+        } else {
+            "neither"
+        }
+    };
+    assert_eq!(on_top(&s), "blue", "added last, drawn last");
+    // Where each one is in /Annots now (a comment may bring a pop-up entry along).
+    let at = |s: &Session, blue: bool| {
+        let a = &s.get(id).unwrap().info.annotations;
+        a.iter().find(|a| a.color.is_some_and(|c| (c[2] > 0.5) == blue)).map(|a| a.index).expect("both are listed")
+    };
+    let arrange = |s: &mut Session, index: usize, how: Arrange| s.apply(id, Edit::ArrangeAnnotation { page: 0, index, how });
+    let i = at(&s, true);
+    arrange(&mut s, i, Arrange::SendToBack).unwrap();
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Send to Back"));
+    assert_eq!(on_top(&s), "red");
+    let i = at(&s, true);
+    assert!(arrange(&mut s, i, Arrange::SendBackward).is_err(), "already at the back");
+    arrange(&mut s, i, Arrange::BringForward).unwrap();
+    assert_eq!(on_top(&s), "blue");
+    s.undo(id).unwrap();
+    assert_eq!(on_top(&s), "red");
+    s.undo(id).unwrap();
+    assert_eq!(on_top(&s), "blue");
 }
 
 #[test]

@@ -138,6 +138,24 @@ pub fn document_japanese_fonts_for_style(serif: bool, bold: bool) -> Vec<&'stati
     document_faces(CRAFT_FONTS, serif, bold)
 }
 
+/// The faces that can stand in for CJK document text: [`document_japanese_fonts_for_style`],
+/// which match the paragraph's serif and weight, then the `Hans` faces. The Japanese faces lack
+/// many Chinese characters (e.g. U+6B22 欢, U+53D1 发), so text that has one moves on to the
+/// Chinese face, which has them, and is drawn wholly in it. Empty without craft-fonts.
+pub fn document_cjk_fonts_for_style(serif: bool, bold: bool) -> Vec<&'static CraftFont> {
+    cjk_document_faces(CRAFT_FONTS, serif, bold)
+}
+
+fn cjk_document_faces(faces: &[CraftFont], serif: bool, bold: bool) -> Vec<&CraftFont> {
+    let mut out = document_faces(faces, serif, bold);
+    for face in faces.iter().filter(|f| f.covers("Hans")) {
+        if !out.iter().any(|f| std::ptr::eq(*f, face)) {
+            out.push(face);
+        }
+    }
+    out
+}
+
 fn document_face(faces: &[CraftFont], serif: bool, bold: bool) -> Option<&CraftFont> {
     document_faces(faces, serif, bold).into_iter().next()
 }
@@ -246,6 +264,27 @@ mod tests {
         assert_eq!(order, [b"serif".as_slice(), b"sans", b"bold"]);
         assert!(document_face(&faces[3..], false, true).is_none());
         assert!(document_face(&[], false, true).is_none());
+    }
+
+    #[test]
+    fn cjk_document_faces_take_the_chinese_face_after_the_japanese_ones() {
+        let faces = [
+            CraftFont { family: "FakeHans", style: "Regular", scripts: &["Hans", "Latn"], bytes: b"hans" },
+            CraftFont { family: "BIZ UDPGothic", style: "Regular", scripts: &["Jpan"], bytes: b"sans" },
+            CraftFont { family: "Shippori Mincho", style: "Regular", scripts: &["Jpan"], bytes: b"serif" },
+            CraftFont { family: "FakeArabic", style: "Regular", scripts: &["Arab"], bytes: b"arab" },
+        ];
+        // The Japanese faces keep their style order, the Chinese face follows, other scripts never.
+        let order: Vec<&[u8]> = cjk_document_faces(&faces, false, false).iter().map(|f| f.bytes).collect();
+        assert_eq!(order, [b"sans".as_slice(), b"serif", b"hans"]);
+        let order: Vec<&[u8]> = cjk_document_faces(&faces, true, false).iter().map(|f| f.bytes).collect();
+        assert_eq!(order, [b"serif".as_slice(), b"sans", b"hans"]);
+        // A face covering both scripts is listed once.
+        let both = [CraftFont { family: "FakeBoth", style: "Regular", scripts: &["Jpan", "Hans"], bytes: b"both" }];
+        assert_eq!(cjk_document_faces(&both, false, false).len(), 1);
+        // Only a Chinese face: it is the only candidate.
+        assert_eq!(cjk_document_faces(&faces[..1], false, false).len(), 1);
+        assert!(cjk_document_faces(&[], false, false).is_empty());
     }
 
     #[test]
