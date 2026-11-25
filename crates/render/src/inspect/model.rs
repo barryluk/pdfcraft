@@ -394,6 +394,11 @@ pub struct Annotation {
     pub text_box: Option<[f32; 4]>,
     /// The comment's pop-up window (`/Popup`): where it sits and whether it is open.
     pub popup: Option<Popup>,
+    /// Drawn with Blend Like Ink (`pdfcraft_annot::ink_blended`).
+    pub ink_blend: bool,
+    /// A turned stamp's angle (degrees counterclockwise in user space) and unturned width and
+    /// height (`pdfcraft_annot::stamp_rotation`).
+    pub rotation: Option<(f32, [f32; 2])>,
 }
 
 /// How far [`group_primaries`] follows `/IRT` from a group subordinate to its primary.
@@ -921,6 +926,8 @@ mod review_state_tests {
                 points: Vec::new(),
                 text_box: None,
                 popup: None,
+                ink_blend: false,
+                rotation: None,
             })
             .collect();
         link_replies(&mut all);

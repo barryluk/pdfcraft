@@ -45,6 +45,11 @@ pub struct Summary {
     pub text_box: Option<[f32; 4]>,
     /// The comment's pop-up window (`/Popup`), when it has one.
     pub popup: Option<PopupInfo>,
+    /// Drawn with Blend Like Ink ([`crate::ink_blended`]).
+    pub ink_blend: bool,
+    /// A turned stamp's angle (degrees counterclockwise in user space) and unturned size
+    /// ([`crate::stamp_rotation`]).
+    pub rotation: Option<(f64, [f64; 2])>,
 }
 
 impl Summary {
@@ -251,6 +256,8 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
                 points,
                 text_box,
                 popup: popup_info(doc, entry.as_ref().map(|r| final_ref(doc, r)), d),
+                ink_blend: crate::ink_blended(doc, d),
+                rotation: crate::stamp_rotation(doc, d),
             });
         }
     }

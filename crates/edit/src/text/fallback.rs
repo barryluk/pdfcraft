@@ -377,15 +377,16 @@ fn no_hebrew_font() -> EditError {
 }
 
 /// The faces a Type 3 replacement may draw `text` with, best first. Text with Hebrew takes the
-/// Hebrew face first (its Latin and digits too, so a line keeps one look), then the Japanese faces
-/// and the bundled Latin one for anything it lacks; other text takes the Japanese faces, and the
-/// bundled Latin face behind them, which covers the Latin, Greek and Cyrillic letters they lack
+/// Hebrew face first (its Latin and digits too, so a line keeps one look), then the CJK faces and
+/// the bundled Latin one for anything it lacks; other text takes the CJK faces (the Japanese ones,
+/// which match the paragraph's style, then the Chinese one for text they can't draw whole), and
+/// the bundled Latin face behind them, which covers the Latin, Greek and Cyrillic letters they lack
 /// (#2593: the Japanese faces have no қ, ғ, ҳ, ә, ө, ү, ұ or һ).
 pub(crate) fn type3_faces(text: &str, family: crate::added::Family, bold: bool) -> Result<(Vec<&'static EmbeddedFace>, bool), EditError> {
-    let japanese = pdfcraft_fonts::document_japanese_fonts_for_style(family == crate::added::Family::Times, bold);
+    let cjk = pdfcraft_fonts::document_cjk_fonts_for_style(family == crate::added::Family::Times, bold);
     let latin = pdfcraft_fonts::document_latin_fonts(bold);
     if !text.chars().any(crate::bidi::is_hebrew) {
-        return Ok((japanese.into_iter().chain(latin).collect(), false));
+        return Ok((cjk.into_iter().chain(latin).collect(), false));
     }
     // Points are drawn on their letter with the font's positioning, which a one-glyph-per-
     // character Type 3 font can't do; refuse rather than print them beside the letter.
@@ -393,7 +394,7 @@ pub(crate) fn type3_faces(text: &str, family: crate::added::Family, bold: bool) 
         return Err(EditError::Invalid("Hebrew points (niqqud) can't be written into a PDF yet; type the text without them".into()));
     }
     let hebrew = pdfcraft_fonts::document_hebrew_font(bold).ok_or_else(no_hebrew_font)?;
-    Ok((std::iter::once(hebrew).chain(japanese).chain(latin).collect(), true))
+    Ok((std::iter::once(hebrew).chain(cjk).chain(latin).collect(), true))
 }
 
 pub(super) fn type3_font(

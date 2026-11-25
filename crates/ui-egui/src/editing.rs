@@ -1200,6 +1200,8 @@ fn comment_page(edit: &Edit) -> Option<usize> {
         | Edit::SetAnnotationContents { page, .. }
         | Edit::ReplyToAnnotation { page, .. }
         | Edit::SetAnnotationStatus { page, .. }
+        | Edit::InkBlendAnnotation { page, .. }
+        | Edit::RotateAnnotation { page, .. }
         | Edit::MoveAnnotation { page, .. }
         | Edit::ReshapeAnnotation { page, .. }
         | Edit::SetAnnotationPopup { page, .. }

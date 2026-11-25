@@ -163,6 +163,11 @@ pub(crate) fn context_rows(ui: &mut egui::Ui, cx: CommentMenuCx<'_>) -> Option<C
                     action = Some(CanvasAction::ColourRequest(request));
                 }
             });
+            // Multiply: white drops out and the colour darkens the text under it, like a pressed
+            // seal. It stays a comment.
+            if MenuItem::new(tl!("Blend Like Ink")).check(a.ink_blend).enabled(allowed && !a.locked).show(ui).ran {
+                action = Some(CanvasAction::Edit(Box::new(Edit::InkBlendAnnotation { page, index, on: !a.ink_blend })));
+            }
             // The checkmark of the reviewer using this copy: checkmarks are each reviewer's own
             // (ISO 32000-2 Table 174: "The annotation has been marked by the user").
             let marked = pdfcraft_render::ReviewStates::new(&info.annotations).marked_by(a, &prefs.author);

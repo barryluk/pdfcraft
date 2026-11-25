@@ -15765,3 +15765,43 @@ fn inline_conversions_refuse_office_documents_without_running_libreoffice() {
     assert_eq!(s.convert_to_pdf_inline("notes.txt", &Arc::new(b"hello".to_vec())).unwrap().0, SourceKind::Text);
     assert!(s.as_pdf_inline("scan.jpg", &Arc::new(jpeg_bytes())).unwrap().starts_with(b"%PDF-"));
 }
+
+/// A picture stamp turned a quarter by its rotation handle reads turned that way as displayed,
+/// on every page rotation, blended like ink too; it carries no comment text, and undo puts it
+/// back upright.
+#[test]
+fn picture_stamps_turn_by_the_rotation_handle_on_rotated_pages() {
+    let bytes = quadrant_png();
+    let colours = [[240, 20, 20, 255], [20, 180, 20, 255], [20, 20, 240, 255], [230, 180, 20, 255]];
+    for degrees in [0, 90, 180, 270] {
+        let (mut session, id) = rotated_blank(degrees);
+        let info = session.get(id).unwrap().info.pages[0].clone();
+        let rect = displayed_rect(&info, 100.0, 100.0, 80.0, 40.0);
+        let file = MarkFile { name: "quadrants.png".into(), bytes: bytes.clone(), page: 0 };
+        session.apply(id, Edit::AddCustomStamp { page: 0, rect, name: "Seal".into(), file, author: "Test".into(), line: None }).unwrap();
+        assert_eq!(session.get(id).unwrap().info.annotations[0].contents, None, "a stamp adds no comment text");
+        session.apply(id, Edit::RotateAnnotation { page: 0, index: 0, angle: 90.0 }).unwrap();
+        let a = session.get(id).unwrap().info.annotations[0].clone();
+        // The unturned size is in user space: 80 × 40 as displayed, turned with the page.
+        let (angle, [w, h]) = a.rotation.unwrap();
+        let (w, h) = if degrees % 180 == 0 { (w, h) } else { (h, w) };
+        assert!(angle == 90.0 && (w - 80.0).abs() < 0.01 && (h - 40.0).abs() < 0.01, "rotation {degrees}: {:?}", a.rotation);
+        let rendered = render_page(&session, id);
+        // Turned a quarter counterclockwise about (100, 100): red top-left goes bottom-left,
+        // green top-right goes top-left, blue bottom-left goes bottom-right, yellow top-right.
+        for ((x, y), colour) in [(90, 120), (90, 80), (110, 120), (110, 80)].into_iter().zip(colours) {
+            assert_eq!(stamp_pixel(&rendered, x * 2, y * 2), colour, "rotation {degrees}; displayed point ({x}, {y})");
+        }
+        // Blended like ink, it stays turned.
+        session.apply(id, Edit::InkBlendAnnotation { page: 0, index: 0, on: true }).unwrap();
+        assert!(session.get(id).unwrap().info.annotations[0].ink_blend);
+        let rendered = render_page(&session, id);
+        for ((x, y), colour) in [(90, 120), (90, 80), (110, 120), (110, 80)].into_iter().zip(colours) {
+            assert_eq!(stamp_pixel(&rendered, x * 2, y * 2), colour, "blended, rotation {degrees}; displayed point ({x}, {y})");
+        }
+        for _ in 0..2 {
+            session.undo(id).unwrap();
+        }
+        assert_upright_quadrants(&session, id, degrees);
+    }
+}

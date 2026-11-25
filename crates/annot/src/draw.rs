@@ -2,7 +2,7 @@ use super::create::{finite, num_array};
 use super::lookup::{annot_dict, annots, page_refs};
 use super::modify::refuse_foreign_text;
 use super::types::NOTE_SIZE;
-use super::{AnnotError, Dict, Document, ObjRef, Object, Stream, appearance};
+use super::{AnnotError, Dict, Document, ObjRef, Object, Stream, appearance, ink};
 
 /// (Re)generate `/AP /N` for the annotation `r` from its dictionary, for an edit that keeps its
 /// text (a restyle, a new size or colour).
@@ -33,6 +33,22 @@ pub(crate) fn redraw_or_restore(doc: &mut Document, r: ObjRef, before: Dict) -> 
 pub(crate) fn draw_appearance(doc: &mut Document, r: ObjRef) -> Result<(), AnnotError> {
     let d = annot_dict(doc, r);
     let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
+    // A turned stamp is drawn unturned in its own size, then turned again (`rotate_stamp`).
+    if let Some((angle, [w, h])) = ink::stamp_rotation(doc, &d)
+        && let Some(rect) = ink::annot_rect(doc, &d)
+    {
+        let (cx, cy) = ((rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0);
+        let mut upright = d.clone();
+        upright.set(b"Rect".to_vec(), num_array(&[cx - w / 2.0, cy - h / 2.0, cx + w / 2.0, cy + h / 2.0]));
+        upright.remove(b"PCAngle");
+        upright.remove(b"PCRotSize");
+        let direct = with_direct_values(doc, &upright);
+        let Some(stream) = build_appearance(doc, &upright, &direct, None) else { return Err(AnnotError::Unsupported(subtype)) };
+        let built = Built::new(stream, &direct);
+        doc.set(r, Object::Dict(upright.clone()));
+        apply_appearance(doc, r, &upright, built)?;
+        return ink::rotate_ref(doc, r, angle);
+    }
     let page = appearance::is_drawn_from_points(&d).then(|| page_box_listing(doc, r)).flatten();
     let direct = with_direct_values(doc, &d);
     let Some(stream) = build_appearance(doc, &d, &direct, page) else { return Err(AnnotError::Unsupported(subtype)) };
@@ -101,7 +117,11 @@ fn build_appearance(doc: &Document, d: &Dict, direct: &Dict, page: Option<[f64; 
     if d.get(b"PCPicture").is_some() {
         let matrix = d.get(b"AP").and_then(|ap| {
             let ap = doc.resolve(ap);
-            let normal = doc.resolve(ap.as_dict()?.get(b"N")?);
+            // Seen through a Blend Like Ink or rotation wrapper, which have none of their own.
+            let normal = match ink::drawing_appearance(doc, d) {
+                Some(drawn) => doc.get(drawn),
+                None => doc.resolve(ap.as_dict()?.get(b"N")?),
+            };
             let Object::Stream(normal) = normal.as_ref() else { return None };
             normal.dict.get(b"Matrix").cloned()
         });
