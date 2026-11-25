@@ -62,6 +62,8 @@ fn an_upright_note_on_a_turned_page_is_in_view_where_it_is_drawn() {
         points: Vec::new(),
         text_box: None,
         popup: None,
+        ink_blend: false,
+        rotation: None,
     };
     let page = PageInfo { width: 140.0, height: 200.0, label: String::new(), crop: [0.0, 0.0, 200.0, 140.0], rotation: 90 };
     let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(140.0, 200.0)), rot: 0, pw: 140.0, ph: 200.0 };
@@ -99,6 +101,8 @@ fn listed(page: usize, index: usize, contents: &str, parent: Option<(usize, usiz
         points: Vec::new(),
         text_box: None,
         popup: None,
+        ink_blend: false,
+        rotation: None,
     }
 }
 
@@ -199,6 +203,8 @@ fn annotation(subtype: &str, contents: Option<&str>, fill_sign: bool) -> Annotat
         points: Vec::new(),
         text_box: None,
         popup: None,
+        ink_blend: false,
+        rotation: None,
     }
 }
 
@@ -537,6 +543,8 @@ fn a_replace_text_group_makes_replace_text_defaults() {
         points: Vec::new(),
         text_box: None,
         popup: None,
+        ink_blend: false,
+        rotation: None,
     };
     let all =
         vec![annot(0, "Caret", Some("Replace"), None), annot(1, "StrikeOut", Some("StrikeOutTextEdit"), Some((0, 0))), annot(2, "Caret", None, None)];

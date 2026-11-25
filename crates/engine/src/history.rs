@@ -67,6 +67,8 @@ pub(crate) fn scope_of(edit: &Edit) -> Scope {
         | Edit::SetAnnotationStatus { .. }
         | Edit::MarkAnnotation { .. }
         | Edit::LockAnnotation { .. }
+        | Edit::InkBlendAnnotation { .. }
+        | Edit::RotateAnnotation { .. }
         | Edit::ReplaceText { .. }
         | Edit::EraseInk { .. }
         | Edit::MoveAnnotation { .. }

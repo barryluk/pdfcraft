@@ -10,7 +10,7 @@ use super::types::{
     BorderShape, FLAG_HIDDEN, FLAG_LOCKED, FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NewAnnotation, ReviewState, Rgb,
     Shape, Style, StyleChange, TextReplacement,
 };
-use super::{AnnotError, Dict, Document, HashMap, HashSet, ObjRef, Object, PdfString, appearance};
+use super::{AnnotError, Dict, Document, HashMap, HashSet, ObjRef, Object, PdfString, appearance, ink};
 use pdfcraft_fonts::Std14;
 
 /// A comment another program drew, whose text the standard fonts can't draw. Redrawing it would
@@ -663,8 +663,16 @@ pub fn set_rect(doc: &mut Document, page: usize, index: usize, rect: [f64; 4], m
         if !finite(&rect) || rect[2] <= rect[0] || rect[3] <= rect[1] {
             return Err(AnnotError::Invalid("invalid rectangle (too small)".into()));
         }
+        // A turned stamp's unturned size scales with its bounding box.
+        let size = ink::stamp_rotation(doc, &d).zip(ink::annot_rect(doc, &d)).map(|((_, [w, h]), old)| {
+            let k = |new: f64, old: f64| if old > 0.0 { new / old } else { 1.0 };
+            [w * k(rect[2] - rect[0], old[2] - old[0]), h * k(rect[3] - rect[1], old[3] - old[1])]
+        });
         doc.update_dict(r, |d| {
             d.set(b"Rect".to_vec(), num_array(&rect));
+            if let Some(size) = size {
+                d.set(b"PCRotSize".to_vec(), num_array(&size));
+            }
             touch(d, meta);
         })?;
         return Ok(());

@@ -124,6 +124,17 @@ pub(super) fn retained(a: &Annotation) -> usize {
 }
 
 impl<'a> Inspector<'a> {
+    /// A turned stamp's angle and unturned size. Keep in step with `pdfcraft_annot::stamp_rotation`.
+    fn stamp_rotation(&self, d: &Dictionary) -> Option<(f32, [f32; 2])> {
+        let angle = d.get(b"PCAngle").ok().and_then(|a| self.resolve(a).as_float().ok()).filter(|a| a.is_finite() && *a != 0.0)?;
+        let size = self.resolve(d.get(b"PCRotSize").ok()?).as_array().ok()?;
+        let size: Vec<f32> = size.iter().filter_map(|v| self.resolve(v).as_float().ok()).collect();
+        match size[..] {
+            [w, h] if w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0 && w < 1e7 && h < 1e7 => Some((angle, [w, h])),
+            _ => None,
+        }
+    }
+
     /// Whether an annotation is a Fill & Sign mark. Keep in step with
     /// `pdfcraft_annot::is_fill_sign`, which the engine's comment list uses.
     fn is_fill_sign(&self, d: &Dictionary, subtype: &str) -> bool {
@@ -329,6 +340,17 @@ impl<'a> Inspector<'a> {
                 points,
                 text_box,
                 popup,
+                // Keep in step with `pdfcraft_annot::ink_blended`.
+                ink_blend: d
+                    .get(b"AP")
+                    .ok()
+                    .and_then(|ap| self.dict(ap))
+                    .and_then(|ap| ap.get(b"N").ok())
+                    .and_then(|n| self.dict(n))
+                    .and_then(|n| n.get(b"PCInk").ok())
+                    .and_then(|b| b.as_bool().ok())
+                    .unwrap_or(false),
+                rotation: self.stamp_rotation(d),
             };
             kept = kept.saturating_add(retained(&annotation).max(raw));
             if kept > MAX_ANNOTATION_BYTES {

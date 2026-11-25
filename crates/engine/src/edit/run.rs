@@ -62,6 +62,8 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::ReplaceText { .. }
         | Edit::EraseInk { .. }
         | Edit::LockAnnotation { .. }
+        | Edit::InkBlendAnnotation { .. }
+        | Edit::RotateAnnotation { .. }
         | Edit::MoveAnnotation { .. }
         | Edit::ReshapeAnnotation { .. }
         | Edit::SetAnnotationPopup { .. }
@@ -671,7 +673,8 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             };
             let shape = Shape::CustomStamp { rect, name: name.clone(), picture: src.xobject, image: src.image, size: picture, line };
             let style = pdfcraft_annot::Style::default_for(&shape);
-            let new = NewAnnotation { page: *page, shape, style, contents: name.clone(), author: author.clone() };
+            // No comment text: the stamp is the mark itself (its name stays in `/Name`).
+            let new = NewAnnotation { page: *page, shape, style, contents: String::new(), author: author.clone() };
             let index = pdfcraft_annot::add_annotation(doc, &new, &cx.meta())?;
             pdfcraft_annot::orient_image_stamp(doc, *page, index, rotation)?;
         }
@@ -745,6 +748,8 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             pdfcraft_annot::set_marked(doc, *page, *index, *marked, author, &cx.meta())?;
         }
         Edit::LockAnnotation { page, index, locked } => pdfcraft_annot::set_locked(doc, *page, *index, *locked)?,
+        Edit::InkBlendAnnotation { page, index, on } => pdfcraft_annot::set_ink_blend(doc, *page, *index, *on)?,
+        Edit::RotateAnnotation { page, index, angle } => pdfcraft_annot::rotate_stamp(doc, *page, *index, *angle, &cx.meta())?,
         Edit::MoveAnnotation { page, index, dx, dy } => pdfcraft_annot::move_annotation(doc, *page, *index, *dx, *dy, &cx.meta())?,
         Edit::ReshapeAnnotation { page, index, points } => pdfcraft_annot::set_points(doc, *page, *index, points, &cx.meta())?,
         Edit::SetAnnotationPopup { page, index, rect, open } => pdfcraft_annot::set_popup(doc, *page, *index, *rect, *open, &cx.meta())?,

@@ -240,6 +240,20 @@ pub enum Edit {
         marked: bool,
         author: String,
     },
+    /// Blend Like Ink: draw the comment in the Multiply blend mode (white drops out, colour darkens
+    /// what is under it), or stop. It stays a comment.
+    InkBlendAnnotation {
+        page: usize,
+        index: usize,
+        on: bool,
+    },
+    /// Turn a stamp to `angle` degrees (counterclockwise in user space, about its centre; 0 is
+    /// upright), as its rotation handle does.
+    RotateAnnotation {
+        page: usize,
+        index: usize,
+        angle: f64,
+    },
     /// Properties ▸ Locked.
     LockAnnotation {
         page: usize,

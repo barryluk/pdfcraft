@@ -26,6 +26,8 @@ pub(crate) fn comment_list(doc: &pdfcraft_cos::Document) -> Vec<pdfcraft_render:
             points: s.points,
             text_box: s.text_box,
             popup: s.popup.map(|p| pdfcraft_render::Popup { rect: p.rect, open: p.open }),
+            ink_blend: s.ink_blend,
+            rotation: s.rotation.map(|(a, [w, h])| (a as f32, [w as f32, h as f32])),
         })
         .collect();
     pdfcraft_render::link_replies(&mut list);

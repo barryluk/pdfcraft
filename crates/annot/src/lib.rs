@@ -21,6 +21,7 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 mod create;
 mod draw;
 mod info;
+mod ink;
 mod lookup;
 mod model3d;
 mod modify;
@@ -35,6 +36,7 @@ pub use create::{
 };
 pub use draw::{AppearanceCache, set_appearance, with_missing_appearances, with_missing_appearances_cached};
 pub use info::{PopupInfo, Props, Summary, is_comment_subtype, is_group_subordinate, props, set_info, summaries};
+pub use ink::{ink_blended, rotate_stamp, set_ink_blend, stamp_rotation};
 #[cfg(test)]
 use lookup::{ANNOTS_ENTRIES_COPIED, PageWalk, annot_dict, annot_ref};
 use lookup::{annots, page_ref};
