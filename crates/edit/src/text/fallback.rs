@@ -377,16 +377,20 @@ fn no_hebrew_font() -> EditError {
 }
 
 /// The faces a Type 3 replacement may draw `text` with, best first. Text with Hebrew takes the
-/// Hebrew face first (its Latin and digits too, so a line keeps one look), then the CJK faces and
-/// the bundled Latin one for anything it lacks; other text takes the CJK faces (the Japanese ones,
-/// which match the paragraph's style, then the Chinese one for text they can't draw whole), and
-/// the bundled Latin face behind them, which covers the Latin, Greek and Cyrillic letters they lack
-/// (#2593: the Japanese faces have no қ, ғ, ҳ, ә, ө, ү, ұ or һ).
+/// Hebrew face first (its Latin and digits too, so a line keeps one look), then the faces below for
+/// anything it lacks; other text takes the Japanese faces (which match the paragraph's style), the
+/// bundled Latin face behind them, which covers the Latin, Greek and Cyrillic letters they lack
+/// (#2593: the Japanese faces have no қ, ғ, ҳ, ә, ө, ү, ұ or һ), and last the Chinese face, for
+/// Chinese text the Japanese faces can't draw whole.
 pub(crate) fn type3_faces(text: &str, family: crate::added::Family, bold: bool) -> Result<(Vec<&'static EmbeddedFace>, bool), EditError> {
     let cjk = pdfcraft_fonts::document_cjk_fonts_for_style(family == crate::added::Family::Times, bold);
+    // The Chinese faces come after the bundled Latin one: they also have the Cyrillic letters the Japanese faces
+    // lack, and ahead of it they would take a Kazakh or Uzbek line from it.
+    let (japanese, chinese): (Vec<_>, Vec<_>) = cjk.into_iter().partition(|f| f.has_script("Jpan"));
     let latin = pdfcraft_fonts::document_latin_fonts(bold);
+    let after: Vec<&'static EmbeddedFace> = japanese.into_iter().chain(latin).chain(chinese).collect();
     if !text.chars().any(crate::bidi::is_hebrew) {
-        return Ok((cjk.into_iter().chain(latin).collect(), false));
+        return Ok((after, false));
     }
     // Points are drawn on their letter with the font's positioning, which a one-glyph-per-
     // character Type 3 font can't do; refuse rather than print them beside the letter.
@@ -394,7 +398,7 @@ pub(crate) fn type3_faces(text: &str, family: crate::added::Family, bold: bool) 
         return Err(EditError::Invalid("Hebrew points (niqqud) can't be written into a PDF yet; type the text without them".into()));
     }
     let hebrew = pdfcraft_fonts::document_hebrew_font(bold).ok_or_else(no_hebrew_font)?;
-    Ok((std::iter::once(hebrew).chain(cjk).chain(latin).collect(), true))
+    Ok((std::iter::once(hebrew).chain(after).collect(), true))
 }
 
 pub(super) fn type3_font(
