@@ -5247,3 +5247,41 @@ fn comment_menu_rows_follow_permissions_and_run_their_action() {
     }
     attachment_page_menu_row();
 }
+
+#[test]
+fn a_stamp_turns_by_dragging_its_rotation_knob() {
+    let mut h = harness(|app| {
+        let id = app.views[0].id;
+        let shape = pdfcraft_engine::Shape::Stamp { rect: [100.0, 60.0, 200.0, 110.0], stamp: pdfcraft_engine::StampKind::Approved, by: None };
+        let style = pdfcraft_engine::Style::default_for(&shape);
+        let new = pdfcraft_engine::NewAnnotation { page: 0, shape, style, contents: String::new(), author: "Tester".into() };
+        app.session.apply(id, pdfcraft_engine::Edit::AddAnnotation(new)).unwrap();
+    });
+    h.run_steps(3);
+    click_pt(&mut h, (150.0, 85.0));
+    assert_eq!(h.state().views[0].session.comments.selection(), vec![(0, 0)], "the stamp is selected");
+    let r = comments(&h)[0].rect;
+    let (cx, cy) = ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
+    let (top, centre) = (at(&h, cx, r[3]), at(&h, cx, cy));
+    // The knob sits above the frame's top edge: found where the cursor offers to grab it.
+    let knob = (4..80)
+        .map(|dy| top - egui::vec2(0.0, dy as f32))
+        .find(|&p| {
+            h.hover_at(p);
+            h.run_steps(1);
+            h.output().platform_output.cursor_icon == egui::CursorIcon::Grab
+        })
+        .expect("a knob above the selected stamp");
+    // From the knob to the right of the centre: a quarter turn clockwise as shown, -90° in user space.
+    drag(&mut h, knob, centre + egui::vec2((centre - knob).length(), 0.0));
+    let c = comments(&h);
+    let (angle, size) = c[0].rotation.expect("turned");
+    assert!((angle + 90.0).abs() < 1.0, "{angle}");
+    assert!((size[0] - (r[2] - r[0])).abs() < 0.5 && (size[1] - (r[3] - r[1])).abs() < 0.5, "keeps its size: {size:?}");
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Rotate stamp"));
+    // Turned a quarter, its bounding box stands on end.
+    let t = c[0].rect;
+    assert!(t[3] - t[1] > t[2] - t[0], "{t:?}");
+    undo(&mut h);
+    assert_eq!(comments(&h)[0].rotation, None);
+}

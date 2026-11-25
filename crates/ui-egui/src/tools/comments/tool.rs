@@ -7,12 +7,12 @@ use craft::review::ui::annotate::{
 };
 use craft::review::{Annotation as Marked, AnnotationEdit, AnnotationKind, AnnotationTool, ShiftLock};
 use craft::ui::canvas::{CanvasTool, ToolAccess, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer};
-use craft::ui::primitives::Draw;
-use egui::Pos2;
+use craft::ui::primitives::{Draw, PaintShape, StrokeWidth, TextRun};
+use egui::{Pos2, Rect, pos2, vec2};
 
 use super::bridge::{self, PageMap};
-use super::state::{Composer, ComposerKind, PageCx};
-use super::{CommentPrefs, CommentTool, CommentView, DocInfo, Edit, MAX_LINE_WIDTH, QuickTool};
+use super::state::{Composer, ComposerKind, PageCx, Turning};
+use super::{Annotation, CommentPrefs, CommentTool, CommentView, DocInfo, Edit, MAX_LINE_WIDTH, QuickTool};
 use crate::canvas::page_parts::{Owner, PagePress};
 use crate::canvas::{PageGeometry, PageSession};
 
@@ -52,6 +52,7 @@ pub(crate) struct CommentsTool<'a> {
     hidden: bool,
     caret: Option<CaretSnap>,
     image_aspect: Option<(craft::review::AnnotationId, f64)>,
+    turning: Option<&'a mut Option<Turning>>,
 }
 
 impl<'a> CommentsTool<'a> {
@@ -80,6 +81,7 @@ impl<'a> CommentsTool<'a> {
             hidden: false,
             caret: None,
             image_aspect: None,
+            turning: None,
         }
     }
 
@@ -134,6 +136,82 @@ impl<'a> CommentsTool<'a> {
         self
     }
 
+    /// Where a turn of the selected stamp by its rotation knob is kept between passes (`CommentView::turning`): with
+    /// it, a lone selected stamp shows the knob above its frame.
+    pub(crate) fn turning(mut self, turning: &'a mut Option<Turning>) -> Self {
+        self.turning = Some(turning);
+        self
+    }
+
+    /// The stamp the rotation knob turns: the one selected comment under Select, when it is an unlocked stamp and the
+    /// document allows commenting.
+    fn turnable(&self) -> Option<&'a Annotation> {
+        if self.turning.is_none() || self.quick != QuickTool::Select || !self.allowed || self.hidden || self.paste.is_some() {
+            return None;
+        }
+        let [id] = self.annotate.selected.as_slice() else { return None };
+        let (page, index) = bridge::key_of(*id);
+        let info: &'a DocInfo = self.map.info;
+        info.annotations.iter().find(|a| a.page == page && a.index == index && a.subtype == "Stamp" && !a.locked)
+    }
+
+    /// A user-space point of `a`'s page on screen.
+    fn on_screen(&self, a: &Annotation, user: [f64; 2]) -> Option<Pos2> {
+        self.map.to_screen(a.page, self.map.to_doc(a.page, user))
+    }
+
+    /// The middle of the top of `a`'s frame on screen and the rotation knob above it.
+    fn knob(&self, a: &Annotation, cx: &ToolContext<'_>) -> Option<(Pos2, Pos2)> {
+        let r = a.rect.map(f64::from);
+        let mut frame: Option<Rect> = None;
+        for corner in [[r[0], r[1]], [r[2], r[1]], [r[2], r[3]], [r[0], r[3]]] {
+            let p = self.on_screen(a, corner)?;
+            frame = Some(frame.map_or(Rect::from_min_max(p, p), |f| f.union(Rect::from_min_max(p, p))));
+        }
+        let frame = frame?;
+        let top = pos2(frame.center().x, frame.top());
+        // Three reaches up: clear of the frame's own handles, which take a press one reach away.
+        Some((top, top - vec2(0.0, 3.0 * cx.reach())))
+    }
+
+    /// Whether the screen point `at` is on the rotation knob of `a`.
+    fn on_knob(&self, a: &Annotation, at: Pos2, cx: &ToolContext<'_>) -> bool {
+        self.knob(a, cx).is_some_and(|(_, knob)| knob.distance(at) <= cx.reach())
+    }
+
+    /// The angle the turn `t` takes its stamp to.
+    fn turned_angle(&self, t: &Turning) -> Option<f32> {
+        let a = self.map.info.annotations.iter().find(|a| a.page == t.page && a.index == t.index)?;
+        let user = |p: Pos2| self.map.to_page(t.page, Point::new(f64::from(p.x), f64::from(p.y))).map(|d| self.map.to_user(t.page, d));
+        Some(dragged_angle(a.rect, t.base, user(t.from)?, user(t.at)?, t.snap))
+    }
+
+    /// The rotation knob above a lone selected stamp, on a stem from its frame; while it is dragged, the stamp's
+    /// outline at the angle it would take and that angle, clockwise as shown.
+    fn paint_knob(&self, draw: &Draw<'_>, cx: &ToolContext<'_>) {
+        let (Some(style), Some(a)) = (cx.style(), self.turnable()) else { return };
+        let Some((top, knob)) = self.knob(a, cx) else { return };
+        let tokens = &style.tokens;
+        let line = style.color(tokens.color.overlay.line);
+        draw.stroke(&PaintShape::Path(vec![top, knob]), StrokeWidth::Thin, line);
+        let radius = tokens.size.handle.md / 2.0;
+        draw.fill(&PaintShape::Circle(knob, radius), style.color(tokens.color.overlay.handle_fill));
+        draw.stroke(&PaintShape::Circle(knob, radius), StrokeWidth::Thin, style.color(tokens.color.overlay.handle_stroke));
+        let Some(t) = self.turning.as_deref().copied().flatten().filter(|t| (t.page, t.index) == (a.page, a.index)) else { return };
+        let Some(angle) = self.turned_angle(&t) else { return };
+        let outline: Option<Vec<Pos2>> = turned_corners(a, angle).into_iter().map(|c| self.on_screen(a, c)).collect();
+        if let Some(outline) = outline {
+            draw.stroke(&PaintShape::Polygon(outline), StrokeWidth::Medium, line);
+        }
+        // User space turns counterclockwise; the page as shown turns the other way round.
+        let shown = if angle == 0.0 { 0.0 } else { -angle };
+        let mut run = TextRun::new(format!("{shown:.1}°"));
+        run.color = Some(line);
+        let height = tokens.size.icon.md;
+        let gap = tokens.space.gap.tight;
+        draw.text(Rect::from_min_size(t.at + vec2(gap * 4.0, -height - gap), vec2(height * 4.0, height)), &run);
+    }
+
     fn page_under(&self, at: Pos2) -> Option<usize> {
         self.map.page_at(Point::new(f64::from(at.x), f64::from(at.y)))
     }
@@ -164,6 +242,35 @@ impl<'a> CommentsTool<'a> {
             *placed = Some(Edit::PasteComments { xfdf: paste.xfdf, page, offset: Some(offset) });
         }
     }
+}
+
+/// The angle a drag from the user-space point `from` to `to` turns a stamp in `rect` to, from `base`: degrees
+/// counterclockwise in user space about the box's centre, in (-180, 180]. `snap` rounds it to 15°.
+fn dragged_angle(rect: [f32; 4], base: f32, from: [f64; 2], to: [f64; 2], snap: bool) -> f32 {
+    let r = rect.map(f64::from);
+    let (ox, oy) = ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
+    let turn = (to[1] - oy).atan2(to[0] - ox) - (from[1] - oy).atan2(from[0] - ox);
+    let mut angle = f64::from(base) + turn.to_degrees();
+    if !angle.is_finite() {
+        return base;
+    }
+    if snap {
+        angle = (angle / 15.0).round() * 15.0;
+    }
+    let angle = angle.rem_euclid(360.0);
+    (if angle > 180.0 { angle - 360.0 } else { angle }) as f32
+}
+
+/// The corners of `a`'s unturned box turned to `angle` about its centre, in user space.
+fn turned_corners(a: &Annotation, angle: f32) -> [[f64; 2]; 4] {
+    let r = a.rect.map(f64::from);
+    let (ox, oy) = ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
+    let [w, h] = a.rotation.map_or([r[2] - r[0], r[3] - r[1]], |(_, [w, h])| [f64::from(w), f64::from(h)]);
+    let (sin, cos) = f64::from(angle).to_radians().sin_cos();
+    [(-w, -h), (w, -h), (w, h), (-w, h)].map(|(x, y)| {
+        let (x, y) = (x / 2.0, y / 2.0);
+        [ox + x * cos - y * sin, oy + x * sin + y * cos]
+    })
 }
 
 /// The framework's tool for `quick`: the comment tool's own, or Select for every other tool.
@@ -257,6 +364,16 @@ impl CanvasTool for CommentsTool<'_> {
             }
             return ToolAction::Done;
         }
+        // The knob above a lone selected stamp turns it; it sits outside the frame, so no comment takes it first.
+        if pointer.button == PointerButton::Primary
+            && let Some(a) = self.turnable()
+            && self.on_knob(a, pointer.pos, cx)
+            && let Some(turning) = self.turning.as_deref_mut()
+        {
+            let base = a.rotation.map_or(0.0, |(angle, _)| angle);
+            *turning = Some(Turning { page: a.page, index: a.index, base, from: pointer.pos, at: pointer.pos, snap: pointer.mods.shift });
+            return ToolAction::Claimed;
+        }
         // A markup tool or Replace Text marks the text its drag selects (`page_after_text`): the text takes the press
         // first. Under Select the comments come first, and a press no comment takes goes on to the text.
         if matches!(self.quick, QuickTool::Comment(_))
@@ -297,7 +414,9 @@ impl CanvasTool for CommentsTool<'_> {
     }
 
     fn drag(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
-        if self.annotating() {
+        if let Some(t) = self.turning.as_deref_mut().and_then(Option::as_mut) {
+            (t.at, t.snap) = (pointer.pos, pointer.mods.shift);
+        } else if self.annotating() {
             self.annotate.drag(pointer, cx);
         } else if let Some(beneath) = self.beneath.as_mut() {
             beneath.drag(pointer, cx);
@@ -305,7 +424,16 @@ impl CanvasTool for CommentsTool<'_> {
     }
 
     fn release(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
-        if self.annotating() {
+        if let Some(mut t) = self.turning.as_deref_mut().and_then(Option::take) {
+            (t.at, t.snap) = (pointer.pos, pointer.mods.shift);
+            // A click on the knob that turns nothing makes no edit.
+            if let Some(angle) = self.turned_angle(&t)
+                && (angle - t.base).abs() >= 0.05
+                && let Some(placed) = self.placed.as_deref_mut()
+            {
+                *placed = Some(Edit::RotateAnnotation { page: t.page, index: t.index, angle: f64::from(angle) });
+            }
+        } else if self.annotating() {
             self.annotate.release(pointer, cx);
         } else if let Some(beneath) = self.beneath.as_mut() {
             beneath.release(pointer, cx);
@@ -321,9 +449,11 @@ impl CanvasTool for CommentsTool<'_> {
     }
 
     fn cancel(&mut self, reason: CancelReason, cx: &mut ToolContext<'_>) {
-        if self.annotating() {
+        // A cancelled turn leaves the stamp as it was.
+        let turned = self.turning.as_deref_mut().and_then(Option::take).is_some();
+        if !turned && self.annotating() {
             self.annotate.cancel(reason, cx);
-        } else if let Some(beneath) = self.beneath.as_mut() {
+        } else if !turned && let Some(beneath) = self.beneath.as_mut() {
             beneath.cancel(reason, cx);
         }
         *self.pressed = false;
@@ -372,6 +502,14 @@ impl CanvasTool for CommentsTool<'_> {
         if self.paste.is_some() && cx.pointer.is_some_and(|p| self.page_under(p.pos).is_some()) {
             return Cursor::System(CursorIcon::Grabbing);
         }
+        if self.turning.as_deref().is_some_and(Option::is_some) {
+            return Cursor::System(CursorIcon::Grabbing);
+        }
+        if let (Some(a), Some(pointer)) = (self.turnable(), cx.pointer)
+            && self.on_knob(a, pointer.pos, cx)
+        {
+            return Cursor::System(CursorIcon::Grab);
+        }
         let own = self.annotate.cursor(cx);
         if self.annotating() {
             return own;
@@ -395,6 +533,7 @@ impl CanvasTool for CommentsTool<'_> {
 
     fn paint(&self, draw: &Draw<'_>, cx: &ToolContext<'_>) {
         self.annotate.paint(draw, cx);
+        self.paint_knob(draw, cx);
         if let (Some(paste), Some(pointer)) = (self.paste.as_ref(), cx.pointer)
             && let Some(page) = self.page_under(pointer.pos)
         {

@@ -118,6 +118,20 @@ impl CommentView {
     }
 }
 
+/// A stamp being turned by the knob above its frame: which stamp, its angle when the drag began, and where on screen
+/// the drag began and is now.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Turning {
+    pub page: usize,
+    pub index: usize,
+    /// The stamp's angle when the drag began, in degrees counterclockwise in user space.
+    pub base: f32,
+    pub from: Pos2,
+    pub at: Pos2,
+    /// Shift is held: the angle snaps to 15°.
+    pub snap: bool,
+}
+
 /// Per-document commenting state. The selection lives on [`Self::tool`] (`tool.selected`), the one store.
 #[derive(Default)]
 pub struct CommentView {
@@ -171,6 +185,8 @@ pub struct CommentView {
     /// The annotation tool took the open press (it did not answer `Ignored`): the drag, release and cancel are its,
     /// not the text selection's.
     pub(crate) tool_pressed: bool,
+    /// The selected stamp being turned by its rotation knob, while the knob is dragged.
+    pub(crate) turning: Option<Turning>,
     /// Snapshot of `(page, index)` comment slot identity from the last `DocInfo`, used to detect
     /// when an edit removes or shifts `/Annots` entries under an active selection or editor.
     pub(crate) slots: std::collections::HashMap<(usize, usize), CommentSlot>,
